@@ -1,0 +1,244 @@
+{
+  "plugin_id": "silo.ramindex.hdhomerun",
+  "version": "0.1.0",
+  "checksum": "__CHECKSUM__",
+  "silo_api_version": "v1",
+  "supported_platforms": [
+    {
+      "os": "darwin",
+      "arch": "arm64"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64"
+    }
+  ],
+  "capabilities": [
+    {
+      "type": "http_routes.v1",
+      "id": "hdhomerun-routes",
+      "display_name": "HDHomeRun Live TV",
+      "description": "Multi-endpoint tuners, channels, guide, and playback."
+    },
+    {
+      "type": "scheduled_task.v1",
+      "id": "hdhomerun-refresh",
+      "display_name": "Refresh HDHomeRun",
+      "description": "Refresh endpoint health, lineup, and guide when due."
+    }
+  ],
+  "http_routes": [
+    {
+      "id": "hdhr-0",
+      "method": "GET",
+      "path": "/hdhomerun",
+      "access": "authenticated",
+      "navigable": true,
+      "navigation_label": "Live TV (HDHomeRun)",
+      "navigation_kind": "user"
+    },
+    {
+      "id": "hdhr-1",
+      "method": "GET",
+      "path": "/hdhomerun/admin",
+      "access": "admin",
+      "navigable": true,
+      "navigation_label": "HDHomeRun Devices",
+      "navigation_kind": "admin"
+    },
+    {
+      "id": "hdhr-2",
+      "method": "GET",
+      "path": "/hdhomerun/assets/app.js",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-3",
+      "method": "GET",
+      "path": "/hdhomerun/assets/app.css",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-4",
+      "method": "GET",
+      "path": "/hdhomerun/assets/hls.min.js",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-5",
+      "method": "GET",
+      "path": "/hdhomerun/assets/mpegts.min.js",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-6",
+      "method": "GET",
+      "path": "/hdhomerun/api/state",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-7",
+      "method": "GET",
+      "path": "/hdhomerun/api/guide",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-8",
+      "method": "POST",
+      "path": "/hdhomerun/api/play",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-9",
+      "method": "POST",
+      "path": "/hdhomerun/api/session/heartbeat",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-10",
+      "method": "POST",
+      "path": "/hdhomerun/api/session/stop",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-11",
+      "method": "GET",
+      "path": "/hdhomerun/media/*",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-12",
+      "method": "HEAD",
+      "path": "/hdhomerun/media/*",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-13",
+      "method": "GET",
+      "path": "/hdhomerun/admin/api/config",
+      "access": "admin",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-14",
+      "method": "POST",
+      "path": "/hdhomerun/admin/api/validate",
+      "access": "admin",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-15",
+      "method": "POST",
+      "path": "/hdhomerun/admin/api/refresh",
+      "access": "admin",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-16",
+      "method": "GET",
+      "path": "/silo-compat/livetv/v1/info",
+      "access": "admin",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-17",
+      "method": "GET",
+      "path": "/silo-compat/livetv/v1/channels",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-18",
+      "method": "GET",
+      "path": "/silo-compat/livetv/v1/programs",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-19",
+      "method": "GET",
+      "path": "/silo-compat/livetv/v1/stream",
+      "access": "admin",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-20",
+      "method": "POST",
+      "path": "/silo-compat/livetv/v1/session/heartbeat",
+      "access": "admin",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-21",
+      "method": "POST",
+      "path": "/silo-compat/livetv/v1/session/stop",
+      "access": "admin",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-license-hls.LICENSE",
+      "method": "GET",
+      "path": "/hdhomerun/assets/hls.LICENSE",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-license-mpegts.LICENSE",
+      "method": "GET",
+      "path": "/hdhomerun/assets/mpegts.LICENSE",
+      "access": "authenticated",
+      "navigable": false
+    }
+  ],
+  "global_config_schema": [
+    {
+      "key": "connection",
+      "title": "HDHomeRun endpoints",
+      "description": "Use HDHomeRun Devices to configure physical or emulated tuners.",
+      "json_schema": "{\"type\": \"object\", \"properties\": {\"endpoints\": {\"type\": \"array\", \"maxItems\": 32, \"items\": {\"type\": \"object\", \"required\": [\"id\", \"url\"], \"properties\": {\"id\": {\"type\": \"string\"}, \"name\": {\"type\": \"string\"}, \"url\": {\"type\": \"string\"}, \"enabled\": {\"type\": \"boolean\"}, \"tuner_limit\": {\"type\": \"integer\"}, \"priority\": {\"type\": \"integer\"}, \"guide_mode\": {\"type\": \"string\"}, \"guide_url\": {\"type\": \"string\"}, \"guide_url_file\": {\"type\": \"string\"}, \"allowed_hosts\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"channels\": {\"type\": \"object\"}}}}}, \"additionalProperties\": false}",
+      "required": false
+    }
+  ],
+  "user_config_schema": [
+    {
+      "key": "preferences",
+      "title": "Viewer preferences",
+      "description": "Profile favorites and channel order.",
+      "json_schema": "{\"type\":\"string\"}",
+      "required": false
+    }
+  ],
+  "metadata": {
+    "display_name": "HDHomeRun for Silo",
+    "summary": "Live TV from physical and emulated HDHomeRun tuners."
+  },
+  "presentation": {
+    "display_name": "HDHomeRun for Silo",
+    "summary": "Live TV from physical and emulated HDHomeRun tuners.",
+    "description_markdown": "Connect multiple HDHomeRun HTTP endpoints with per-device tuner limits, explicit station failover, and XMLTV or SiliconDust guide data. Uses the Ramindex Silo Live TV contract. DRM-protected channels and DVR are not supported.",
+    "setup_markdown": "Install on the Ramindex Silo fork. Open HDHomeRun Devices and add endpoint addresses reachable from the server. Configure a guide for each endpoint if desired. Browser playback requires the loopback stream relay in the companion Silo fork.",
+    "homepage_url": "https://github.com/theramindex/silo-plugin-hdhomerun",
+    "source_url": "https://github.com/theramindex/silo-plugin-hdhomerun",
+    "support_url": "https://github.com/theramindex/silo-plugin-hdhomerun/issues",
+    "changelog_url": "https://github.com/theramindex/silo-plugin-hdhomerun/releases",
+    "publisher_name": "Ramindex",
+    "publisher_url": "https://github.com/theramindex",
+    "license_spdx": "AGPL-3.0-only"
+  },
+  "category": "Video/Live TV"
+}

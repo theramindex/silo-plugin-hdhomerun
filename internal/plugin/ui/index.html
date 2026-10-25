@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>HDHomeRun · Live TV</title>
+    <script>
+      const mount = location.pathname.split("/hdhomerun")[0] + "/hdhomerun";
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = mount + "/assets/app.css";
+      document.head.append(css);
+    </script>
+  </head>
+  <body>
+    <header class="top">
+      <a class="back" href="/" aria-label="Back to Silo">‹ <span>Silo</span></a>
+      <div class="brand">
+        <span class="eyebrow">LIVE TV</span>
+        <h1>HDHomeRun</h1>
+      </div>
+      <nav aria-label="Live TV">
+        <a href="#channels" id="channels-tab">Channels</a
+        ><a href="#guide" id="guide-tab">Guide</a
+        ><a id="devices-tab" hidden>Devices</a>
+      </nav>
+      <span id="connection" class="muted">Connecting…</span>
+    </header>
+    <div id="notice" role="status" hidden></div>
+    <main id="viewer">
+      <section class="toolbar" aria-label="Channel filters">
+        <label class="search"
+          ><span class="sr-only">Find a channel</span
+          ><input
+            id="search"
+            type="search"
+            placeholder="Find a channel…" /></label
+        ><select id="source" aria-label="Filter by endpoint">
+          <option value="">All endpoints</option></select
+        ><button id="favorites" aria-pressed="false">☆ Favorites</button
+        ><span id="channel-count" class="muted"></span>
+      </section>
+      <div class="watch-layout">
+        <section aria-label="Channels and guide">
+          <div id="guide-tools" hidden>
+            <button id="previous" aria-label="Previous three hours">‹</button
+            ><button id="now">Now</button
+            ><button id="next" aria-label="Next three hours">›</button
+            ><span id="guide-time"></span>
+          </div>
+          <div id="channel-list"></div>
+          <p id="empty" class="empty" hidden></p>
+        </section>
+        <aside id="detail" aria-label="Player and programme details">
+          <div class="player-placeholder">
+            <span class="eyebrow">YOUR LOCAL LINEUP</span>
+            <h2>Choose a channel.<br />See what’s on.</h2>
+            <p>Live television from your connected tuners, together in Silo.</p>
+          </div>
+        </aside>
+      </div>
+    </main>
+    <main id="admin" hidden>
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">SOURCES</span>
+          <h2>Your endpoints</h2>
+          <p>
+            Connect physical tuners or HDHomeRun-compatible services reachable
+            from the Silo server.
+          </p>
+        </div>
+        <div class="actions">
+          <button id="refresh">Refresh lineup</button
+          ><button id="add" class="primary">Add endpoint</button>
+        </div>
+      </div>
+      <div id="device-list"></div>
+      <form id="editor" hidden>
+        <div class="section-heading">
+          <h2 id="edit-title">Add endpoint</h2>
+          <button type="button" id="cancel">Cancel</button>
+        </div>
+        <div class="form-grid">
+          <label
+            >Name<input
+              name="name"
+              required
+              maxlength="120"
+              placeholder="Living room tuner" /></label
+          ><label
+            >Endpoint address<input
+              name="url"
+              required
+              type="url"
+              placeholder="http://192.168.1.30" /></label
+          ><label
+            >Tuner limit<input
+              name="tuner_limit"
+              type="number"
+              min="0"
+              max="64"
+              value="0"
+            /><small
+              >0 uses the device’s advertised count; falls back to one.</small
+            ></label
+          ><label
+            >Priority<input
+              name="priority"
+              type="number"
+              min="-1000"
+              max="1000"
+              value="0"
+            /><small
+              >Lower numbers are preferred for shared stations.</small
+            ></label
+          ><label class="check"
+            ><input name="enabled" type="checkbox" checked />Endpoint
+            enabled</label
+          >
+        </div>
+        <h3>Programme guide</h3>
+        <div class="form-grid">
+          <label
+            >Guide source<select name="guide_mode">
+              <option value="none">No guide</option>
+              <option value="silicondust">SiliconDust guide</option>
+              <option value="xmltv">XMLTV URL</option></select
+            ><small
+              >SiliconDust requires a supported physical tuner.</small
+            ></label
+          ><label
+            >XMLTV URL<input
+              name="guide_url"
+              type="url"
+              placeholder="https://provider.example/guide.xml.gz"
+            /><small>Leave empty when using a URL file below.</small></label
+          >
+        </div>
+        <details>
+          <summary>Advanced connection settings</summary>
+          <div class="form-grid">
+            <label
+              >XMLTV URL file<input
+                name="guide_url_file"
+                placeholder="/run/secrets/xmltv-url"
+              /><small
+                >Path on the server containing the guide URL.</small
+              ></label
+            ><label
+              >Additional stream hosts<input
+                name="allowed_hosts"
+                placeholder="stream.example.com, 192.168.1.31"
+              /><small
+                >Allow only hosts your emulator uses for media.</small
+              ></label
+            >
+          </div>
+        </details>
+        <details>
+          <summary>Channel names, guide matching, and failover</summary>
+          <p>
+            Channels stay separate by default. Give the same station key to
+            matching channels on different endpoints to enable tuner failover.
+            Guide IDs match the channel IDs in your XMLTV source.
+          </p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Channel</th>
+                  <th>Display name</th>
+                  <th>Station key</th>
+                  <th>Guide ID</th>
+                  <th>Hide</th>
+                </tr>
+              </thead>
+              <tbody id="mapping-rows"></tbody>
+            </table>
+          </div>
+          <p id="mapping-empty" class="muted" hidden>
+            Save and refresh this endpoint to load its channels.
+          </p>
+        </details>
+        <div class="form-footer">
+          <p id="save-status" role="status"></p>
+          <button type="submit" class="primary" id="save">Save endpoint</button>
+        </div>
+      </form>
+    </main>
+    <script>
+      const script = document.createElement("script");
+      script.src = mount + "/assets/app.js";
+      document.body.append(script);
+    </script>
+    <footer class="legal">
+      <a href="https://github.com/theramindex/silo-plugin-hdhomerun"
+        >Source code</a
+      >
+      · Player licenses: <a id="hls-license">Hls.js</a>,
+      <a id="mpegts-license">Mpegts.js</a>
+    </footer>
+    <script>
+      document.getElementById("hls-license").href =
+        mount + "/assets/hls.LICENSE";
+      document.getElementById("mpegts-license").href =
+        mount + "/assets/mpegts.LICENSE";
+    </script>
+  </body>
+</html>

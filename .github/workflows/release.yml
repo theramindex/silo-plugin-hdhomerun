@@ -1,0 +1,36 @@
+name: Release
+
+# Runs on every push to main and from Actions tab -> Release -> Run workflow, as
+# the ramindex-ci GitHub App. Conventional Commits since the last tag pick the
+# version: feat is minor, fix/perf/revert patch, other types release nothing.
+# The release bumps manifest.json, verifies, commits, tags and pushes; the tag
+# build then publishes the release and updates the catalog. See RELEASING.md in
+# theramindex/silo-plugins.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without a leading v. Blank picks it from the commits (at least a patch).
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    # One release at a time; a newer push waits and then releases everything since the last tag.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    uses: theramindex/silo-plugins/.github/workflows/release-plugin.yml@main
+    with:
+      auto: ${{ github.event_name == 'push' }}
+      version: ${{ inputs.version }}
+      commit-message: "chore(release): HDHomeRun {version}"
+      tag-message: HDHomeRun v{version}
+      verify: ./scripts/verify-release.sh {version}
+    secrets: inherit
