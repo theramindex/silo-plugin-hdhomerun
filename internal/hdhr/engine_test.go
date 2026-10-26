@@ -1,6 +1,7 @@
 package hdhr
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func testDevice(t *testing.T, name string, tuners int, busy *atomic.Bool) *httptest.Server {
@@ -192,5 +194,67 @@ func TestLineupsShareServerCapacityWithoutMergingStations(t *testing.T) {
 	}
 	if _, err = engine.Resolve(channels[1].ID, "second", "viewer", "any"); err != nil {
 		t.Fatal("released capacity was not reusable", err)
+	}
+}
+
+func TestLargeGuideSurvivesRestartDuringUpstreamOutage(t *testing.T) {
+	const count = 8500
+	var offline atomic.Bool
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if offline.Load() {
+			w.WriteHeader(503)
+			return
+		}
+		switch r.URL.Path {
+		case "/discover.json":
+			json.NewEncoder(w).Encode(map[string]any{"DeviceID": "cache-test", "TunerCount": 2})
+		case "/lineup.json":
+			json.NewEncoder(w).Encode([]map[string]any{{"GuideNumber": "5.1", "GuideName": "News", "URL": server.URL + "/live.ts"}})
+		case "/guide.xml":
+			b := bufio.NewWriterSize(w, 64<<10)
+			defer b.Flush()
+			io.WriteString(b, `<tv><channel id="5.1"><display-name>News</display-name></channel>`)
+			description := strings.Repeat("x", 8192)
+			now := time.Now().UTC().Truncate(time.Minute)
+			for i := 0; i < count; i++ {
+				from := now.Add(time.Duration(i) * time.Minute)
+				fmt.Fprintf(b, `<programme channel="5.1" start="%s" stop="%s"><title>Programme %d</title><desc>%s</desc></programme>`, from.Format("20060102150405 -0700"), from.Add(time.Minute).Format("20060102150405 -0700"), i, description)
+			}
+			io.WriteString(b, "</tv>")
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	cfg := Config{Endpoints: []Endpoint{{ID: "one", URL: server.URL, GuideMode: "xmltv", GuideURL: server.URL + "/guide.xml"}}}
+	first, err := NewEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Configure(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(first.Snapshot().Programs); got != count {
+		t.Fatalf("fresh guide: got %d, want %d", got, count)
+	}
+	first.Close()
+	offline.Store(true)
+	restored, err := NewEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if err = restored.Configure(cfg); err != nil {
+		t.Fatal(err)
+	}
+	_ = restored.Refresh(context.Background())
+	snap := restored.Snapshot()
+	if len(snap.Programs) != count || len(snap.Channels) != 1 {
+		t.Fatalf("cached guide lost after restart: %d programmes, %d channels", len(snap.Programs), len(snap.Channels))
 	}
 }

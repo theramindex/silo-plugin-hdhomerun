@@ -1,6 +1,7 @@
 package hdhr
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -207,16 +209,15 @@ func (e *Engine) Configure(cfg Config) error {
 	e.programs = nil
 	// Cache contains private source URLs. It is never served through user APIs.
 	if e.dir != "" {
-		if info, err := os.Stat(filepath.Join(e.dir, "catalog.json")); err == nil && info.Size() <= 64<<20 {
-			if data, err := os.ReadFile(filepath.Join(e.dir, "catalog.json")); err == nil {
-				var saved diskState
-				if json.Unmarshal(data, &saved) == nil && saved.Signature == signature {
-					e.devices = saved.Devices
-					e.updatedAt = saved.UpdatedAtUnix
-					if e.devices == nil {
-						e.devices = map[string]deviceState{}
-					}
+		for _, name := range []string{"catalog.json.gz", "catalog.json"} {
+			saved, err := readDiskState(filepath.Join(e.dir, name))
+			if err == nil && saved.Signature == signature {
+				e.devices = saved.Devices
+				e.updatedAt = saved.UpdatedAtUnix
+				if e.devices == nil {
+					e.devices = map[string]deviceState{}
 				}
+				break
 			}
 		}
 	}
@@ -346,6 +347,43 @@ func (e *Engine) Refresh(ctx context.Context) error {
 	}
 	return nil
 }
+
+// XMLTV input is bounded at 256 MiB; its retained JSON includes additional
+// fields. Keep large guides compressed without discarding the legacy cache.
+const maxCacheBytes = 512 << 20
+
+func readDiskState(path string) (diskState, error) {
+	var saved diskState
+	f, err := os.Open(path)
+	if err != nil {
+		return saved, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() > maxCacheBytes {
+		return saved, errors.New("catalog cache exceeds limit")
+	}
+	var reader io.Reader = f
+	if strings.HasSuffix(path, ".gz") {
+		compressed, err := gzip.NewReader(f)
+		if err != nil {
+			return saved, err
+		}
+		defer compressed.Close()
+		reader = compressed
+	}
+	bounded := &io.LimitedReader{R: reader, N: maxCacheBytes + 1}
+	decoder := json.NewDecoder(bounded)
+	if err := decoder.Decode(&saved); err != nil {
+		return diskState{}, err
+	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF || bounded.N <= 0 {
+		return diskState{}, errors.New("invalid or oversized catalog cache")
+	}
+	return saved, nil
+}
+
 func (e *Engine) persistLocked() {
 	if e.dir == "" {
 		return
@@ -354,7 +392,7 @@ func (e *Engine) persistLocked() {
 		return
 	}
 	data, err := json.Marshal(diskState{Signature: e.signature, Devices: e.devices, UpdatedAtUnix: e.updatedAt})
-	if err != nil || len(data) > 64<<20 {
+	if err != nil || len(data) > maxCacheBytes {
 		return
 	}
 	f, err := os.CreateTemp(e.dir, ".catalog-*")
@@ -363,14 +401,24 @@ func (e *Engine) persistLocked() {
 	}
 	name := f.Name()
 	defer os.Remove(name)
-	if _, err = f.Write(data); err != nil {
+	compressed, err := gzip.NewWriterLevel(f, gzip.BestSpeed)
+	if err != nil {
+		_ = f.Close()
+		return
+	}
+	if _, err = compressed.Write(data); err != nil {
+		_ = compressed.Close()
+		_ = f.Close()
+		return
+	}
+	if compressed.Close() != nil {
 		_ = f.Close()
 		return
 	}
 	if f.Close() != nil {
 		return
 	}
-	_ = os.Rename(name, filepath.Join(e.dir, "catalog.json"))
+	_ = os.Rename(name, filepath.Join(e.dir, "catalog.json.gz"))
 }
 func (e *Engine) rebuildLocked() {
 	channels := []Channel{}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -58,17 +59,35 @@ func TestGuideRefreshRetainsPrivateSnapshotAcrossOutageAndRestart(t *testing.T) 
 	}
 	first := snap.Programs[0].ID
 	e.Close()
-	data, err := os.ReadFile(filepath.Join(dir, "catalog.json"))
+	file, err := os.Open(filepath.Join(dir, "catalog.json.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(compressed)
+	compressed.Close()
+	file.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), "must-not-persist") {
 		t.Fatal("device authorization escaped into disk cache")
 	}
-	st, _ := os.Stat(filepath.Join(dir, "catalog.json"))
+	st, _ := os.Stat(filepath.Join(dir, "catalog.json.gz"))
 	if st.Mode().Perm() != 0600 {
 		t.Fatalf("private cache permissions: %v", st.Mode())
 	}
+	// Existing installations still have plain JSON; exercise that migration.
+	if err := os.WriteFile(filepath.Join(dir, "catalog.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "catalog.json.gz")); err != nil {
+		t.Fatal(err)
+	}
+
 	offline.Store(true)
 	e, err = NewEngine(dir)
 	if err != nil {
