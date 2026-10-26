@@ -21,8 +21,8 @@
     {
       "type": "http_routes.v1",
       "id": "hdhomerun-routes",
-      "display_name": "HDHomeRun Live TV",
-      "description": "Multi-endpoint tuners, channels, guide, and playback."
+      "display_name": "HDHomeRun for Silo",
+      "description": "Live TV from physical and emulated HDHomeRun endpoints, with guide, tuner limits, and station failover. Browser playback requires the Ramindex Silo stream relay."
     },
     {
       "type": "scheduled_task.v1",

@@ -32,5 +32,6 @@ jobs:
       version: ${{ inputs.version }}
       commit-message: "chore(release): HDHomeRun {version}"
       tag-message: HDHomeRun v{version}
+      release-notes: docs/releases/v{version}.md
       verify: ./scripts/verify-release.sh {version}
     secrets: inherit
