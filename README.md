@@ -13,7 +13,7 @@ Live TV from multiple physical or emulated HDHomeRun HTTP endpoints, built for t
 ## Install and configure
 
 1. Build the companion Silo fork with the generic loopback HTTP stream relay in `internal/plugins/http_proxy_relay.go`. Native compatible TV clients use the existing Live TV contract; the embedded browser player needs this relay.
-2. Upload the matching `dist/hdhomerun-0.1.0-<os>-<arch>.silo-plugin.zip` in Silo's plugin administration.
+2. Upload the matching `dist/hdhomerun-0.1.1-<os>-<arch>.silo-plugin.zip` in Silo's plugin administration.
 3. Open **HDHomeRun Devices**, add a name and base address, then save. For a real tuner, use `http://192.168.1.30`. For Dispatcharr, use its HDHR base, normally `https://your-dispatcharr/hdhr`, or its exported channel/output profile base.
 4. The Silo server must reach both `discover.json` and the advertised lineup and media URLs. A reverse proxy or the source's network access rules must admit the server.
 5. Choose **No guide**, **SiliconDust guide**, or **XMLTV URL** independently for each endpoint. An emulator normally uses XMLTV. You may instead put a guide URL in a server-side file and set **XMLTV URL file**; never configure both.

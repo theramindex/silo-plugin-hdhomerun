@@ -109,3 +109,31 @@ func TestLiveTVContractAndViewerMediaAuthorization(t *testing.T) {
 		t.Fatalf("no-guide fallback: %s", r.Body)
 	}
 }
+
+func TestFreshInstallConfigSupportsSetup(t *testing.T) {
+	engine, err := hdhr.NewEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	server := &Server{Engine: engine}
+	// A fresh Silo installation has not supplied a connection configuration yet.
+	response, err := server.Handle(context.Background(), &pluginv1.HandleHTTPRequest{
+		Method: "GET", Path: "/hdhomerun/admin/api/config",
+		Headers: map[string]string{"X-Silo-User-Id": "1", "X-Silo-User-Role": "admin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("setup config: status=%d body=%s", response.StatusCode, response.Body)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(response.Body, &config); err != nil {
+		t.Fatal(err)
+	}
+	endpoints, ok := config["endpoints"].([]any)
+	if !ok || len(endpoints) != 0 {
+		t.Fatalf("fresh setup requires an empty endpoint array, got %s", response.Body)
+	}
+}

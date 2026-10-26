@@ -131,7 +131,7 @@ func NewEngine(dir string) (*Engine, error) {
 		return nil, errors.New("unable to start local stream relay")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{devices: map[string]deviceState{}, leases: map[string]*lease{}, cooldown: map[string]time.Time{}, dir: dir, address: listener.Addr().String(), ctx: ctx, cancel: cancel}
+	e := &Engine{config: Config{Endpoints: []Endpoint{}}, devices: map[string]deviceState{}, leases: map[string]*lease{}, cooldown: map[string]time.Time{}, dir: dir, address: listener.Addr().String(), ctx: ctx, cancel: cancel}
 	e.server = &http.Server{Handler: http.HandlerFunc(e.serveGateway), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10}
 	e.wg.Add(2)
 	go func() { defer e.wg.Done(); _ = e.server.Serve(listener) }()

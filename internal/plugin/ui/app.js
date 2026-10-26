@@ -724,6 +724,7 @@
           .join("");
       if (adminPage) {
         state.config = await api("/admin/api/config");
+        if (!Array.isArray(state.config.endpoints)) state.config.endpoints = [];
         renderDevices();
       } else {
         try {
