@@ -27,14 +27,18 @@ import (
 func main() {
 	address := flag.String("listen", "127.0.0.1:18770", "loopback UI address")
 	media := flag.String("media-dir", "", "optional ffmpeg-generated HLS fixture directory")
+	count := flag.Int("channels", 6, "channels per local emulator (1–20000)")
 	flag.Parse()
+	if *count < 1 || *count > 20000 {
+		log.Fatal("channels must be between 1 and 20000")
+	}
 	host, _, err := net.SplitHostPort(*address)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 		log.Fatal("development server requires a loopback listener")
 	}
 	devices := []*httptest.Server{}
 	for i := 0; i < 2; i++ {
-		devices = append(devices, emulator(i, *media))
+		devices = append(devices, emulator(i, *media, *count))
 	}
 	defer func() {
 		for _, d := range devices {
@@ -156,7 +160,7 @@ func (w flushWriter) Write(b []byte) (int, error) {
 	w.ResponseWriter.(http.Flusher).Flush()
 	return n, e
 }
-func emulator(index int, media string) *httptest.Server {
+func emulator(index int, media string, count int) *httptest.Server {
 	names := []string{"WNYC Local", "Cinema", "Public Television", "World News", "Culture", "Kids"}
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +169,8 @@ func emulator(index int, media string) *httptest.Server {
 			json.NewEncoder(w).Encode(map[string]any{"FriendlyName": "Local emulator", "ModelNumber": "HDHR-EMU", "DeviceID": "same-id", "TunerCount": 2})
 		case "/lineup.json":
 			rows := []map[string]any{}
-			for i, name := range names {
+			for i := 0; i < count; i++ {
+				name := names[i%len(names)]
 				suffix := "/live.ts"
 				if index == 1 {
 					suffix = "/media/index.m3u8"
@@ -177,7 +182,8 @@ func emulator(index int, media string) *httptest.Server {
 			w.Header().Set("Content-Type", "application/xml")
 			fmt.Fprint(w, "<tv>")
 			now := time.Now().UTC().Truncate(time.Hour)
-			for i, name := range names {
+			for i := 0; i < count; i++ {
+				name := names[i%len(names)]
 				fmt.Fprintf(w, `<channel id="%d.1"><display-name>%s</display-name></channel>`, i+2, name)
 				for j := -2; j < 18; j++ {
 					from := now.Add(time.Duration(j) * time.Hour)

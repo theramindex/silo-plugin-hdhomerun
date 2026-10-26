@@ -1,17 +1,22 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
+	publicmanifest "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/manifest"
 	"github.com/theramindex/silo-plugin-hdhomerun/internal/hdhr"
+	htmlparser "golang.org/x/net/html"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -136,4 +141,139 @@ func TestFreshInstallConfigSupportsSetup(t *testing.T) {
 	if !ok || len(endpoints) != 0 {
 		t.Fatalf("fresh setup requires an empty endpoint array, got %s", response.Body)
 	}
+}
+
+func TestPageUsesTrustedSiloThemeBeforeRendering(t *testing.T) {
+	engine, err := hdhr.NewEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	server := &Server{Engine: engine}
+	for _, tc := range []struct{ name, header, query, want string }{
+		{"trusted host preference", "midnight-cinema", "daylight", "midnight-cinema"},
+		{"launch query fallback", "", "daylight", "daylight"},
+		{"reject attribute injection", "", `light" onload="alert(1)`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q, _ := structpb.NewStruct(map[string]any{"theme": tc.query})
+			response, err := server.Handle(context.Background(), &pluginv1.HandleHTTPRequest{Method: "GET", Path: "/hdhomerun", Query: q, Headers: map[string]string{"X-Silo-User-Id": "1", "X-Silo-User-Role": "admin", "X-Silo-Theme": tc.header}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokenizer := htmlparser.NewTokenizer(strings.NewReader(string(response.Body)))
+			for {
+				switch tokenizer.Next() {
+				case htmlparser.ErrorToken:
+					t.Fatal("page has no html root")
+				case htmlparser.StartTagToken:
+					token := tokenizer.Token()
+					if token.Data != "html" {
+						continue
+					}
+					found := false
+					for _, a := range token.Attr {
+						if a.Key == "data-silo-theme" {
+							found = true
+							if a.Val != tc.want {
+								t.Fatalf("theme=%q, want %q", a.Val, tc.want)
+							}
+						}
+						if strings.HasPrefix(a.Key, "on") {
+							t.Fatal("theme input created an event handler")
+						}
+					}
+					if !found {
+						t.Fatal("launch theme is missing before first paint")
+					}
+					return
+				}
+			}
+		})
+	}
+}
+
+func TestPageAssetsAreAvailableThroughDeclaredPluginRoutes(t *testing.T) {
+	engine, err := hdhr.NewEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	server := &Server{Engine: engine}
+	source, err := os.ReadFile("../../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := publicmanifest.Load(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := map[string]bool{}
+	for _, route := range manifest.GetHttpRoutes() {
+		if route.GetMethod() == "GET" {
+			routes[route.GetPath()] = true
+		}
+	}
+	for _, path := range []string{"/hdhomerun", "/hdhomerun/", "/hdhomerun/admin"} {
+		t.Run(path, func(t *testing.T) {
+			call := func(path string) *pluginv1.HandleHTTPResponse {
+				t.Helper()
+				response, err := server.Handle(context.Background(), &pluginv1.HandleHTTPRequest{Method: "GET", Path: path, Headers: map[string]string{"X-Silo-User-Id": "1", "X-Silo-User-Role": "admin"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return response
+			}
+			response := call(path)
+			base, _ := url.Parse("https://silo.example" + path)
+			tokenizer := htmlparser.NewTokenizer(strings.NewReader(string(response.Body)))
+			seen := 0
+			for {
+				kind := tokenizer.Next()
+				if kind == htmlparser.ErrorToken {
+					break
+				}
+				if kind != htmlparser.StartTagToken && kind != htmlparser.SelfClosingTagToken {
+					continue
+				}
+				token := tokenizer.Token()
+				if token.Data != "script" && token.Data != "link" {
+					continue
+				}
+				for _, attr := range token.Attr {
+					if attr.Key != "src" && attr.Key != "href" {
+						continue
+					}
+					relative, err := url.Parse(attr.Val)
+					if err != nil {
+						t.Fatal(err)
+					}
+					asset := base.ResolveReference(relative)
+					if !routes[asset.Path] {
+						t.Fatalf("page dependency %s has no SDK route", asset.Path)
+					}
+					r := call(asset.Path)
+					if r.StatusCode != 200 || len(r.Body) == 0 {
+						t.Fatalf("page dependency %s could not load", asset.Path)
+					}
+					seen++
+				}
+			}
+			if seen < 3 {
+				t.Fatal("page is missing its scripts or stylesheet")
+			}
+		})
+	}
+	font := serverAssetRequest(t, server, "/hdhomerun/assets/plus-jakarta-sans-latin-wght-normal.woff2")
+	if font.StatusCode != 200 || font.Headers["Content-Type"] != "font/woff2" || !bytes.HasPrefix(font.Body, []byte("wOF2")) {
+		t.Fatal("the native UI font was not served as a WOFF2 font")
+	}
+}
+func serverAssetRequest(t *testing.T, server *Server, path string) *pluginv1.HandleHTTPResponse {
+	t.Helper()
+	r, err := server.Handle(context.Background(), &pluginv1.HandleHTTPRequest{Method: "GET", Path: path, Headers: map[string]string{"X-Silo-User-Id": "1", "X-Silo-User-Role": "admin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }

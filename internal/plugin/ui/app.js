@@ -25,6 +25,8 @@
     generation: 0,
     write: Promise.resolve(),
     loading: false,
+    page: 0,
+    guideRequest: "",
   };
   let token = "",
     refreshing;
@@ -148,65 +150,197 @@
   function selectedGuide() {
     return location.hash === "#guide";
   }
+  const icons = {
+    star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"/>',
+    play: '<path d="m9 5 11 7-11 7V5Z"/>',
+    close: '<path d="m6 6 12 12M6 18 18 6"/>',
+    tv: '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="m8 2 4 3 4-3"/>',
+  };
+  const icon = (name) =>
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    icons[name] +
+    "</svg>";
+  function pageChannels() {
+    const list = visible();
+    state.page = Math.min(
+      state.page,
+      Math.max(0, Math.ceil(list.length / 60) - 1),
+    );
+    return list.slice(state.page * 60, state.page * 60 + 60);
+  }
+  function logo(c) {
+    let src = "";
+    try {
+      const u = new URL(c.logoUrl);
+      if (
+        ["http:", "https:"].includes(u.protocol) &&
+        !u.username &&
+        !u.password
+      )
+        src = u.href;
+    } catch (_) {}
+    return (
+      '<span class="channel-logo">' +
+      (src
+        ? '<img src="' +
+          esc(src) +
+          '" alt="" loading="lazy" referrerpolicy="no-referrer">'
+        : esc(c.number)) +
+      "</span>"
+    );
+  }
+  function star(c) {
+    return `<button class="star" data-favorite="${esc(c.id)}" aria-label="${state.favorites[c.id] ? "Remove" : "Add"} ${esc(c.name)} ${state.favorites[c.id] ? "from" : "to"} favorites" aria-pressed="${!!state.favorites[c.id]}">${icon("star")}</button>`;
+  }
+  function renderGroups() {
+    const counts = new Map();
+    state.channels.forEach((c) =>
+      c.sources.forEach((source) =>
+        counts.set(source.endpointId, (counts.get(source.endpointId) || 0) + 1),
+      ),
+    );
+    $("all-count").textContent = state.channels.length.toLocaleString();
+    $("favorite-count").textContent = state.channels
+      .filter((c) => state.favorites[c.id])
+      .length.toLocaleString();
+    $("all-channels").classList.toggle(
+      "active",
+      !state.source && !state.onlyFavorites,
+    );
+    $("favorites").setAttribute("aria-pressed", String(state.onlyFavorites));
+    $("source-groups").innerHTML = state.endpoints
+      .map(
+        (e) =>
+          `<button type="button" class="group-button ${state.source === e.id ? "active" : ""}" data-source="${esc(e.id)}" aria-pressed="${state.source === e.id}"><span>${esc(e.name)}</span><small>${(counts.get(e.id) || 0).toLocaleString()}</small></button>`,
+      )
+      .join("");
+  }
   function renderChannels() {
     const list = visible();
+    const page = pageChannels();
     const guide = selectedGuide();
+    $("viewer").classList.toggle("is-guide", guide);
     $("guide-tools").hidden = !guide;
-    $("channels-tab").setAttribute("aria-current", guide ? "false" : "page");
+    $("channels-tab").setAttribute(
+      "aria-current",
+      !guide && !state.onlyFavorites ? "page" : "false",
+    );
     $("guide-tab").setAttribute("aria-current", guide ? "page" : "false");
-    $("channel-count").textContent = list.length + " channels";
+    $("favorites-tab").setAttribute(
+      "aria-current",
+      !guide && state.onlyFavorites ? "page" : "false",
+    );
+    $("channel-count").textContent = list.length.toLocaleString() + " channels";
     $("empty").hidden = list.length > 0;
     $("empty").textContent = !state.channels.length
       ? state.endpoints.length
-        ? "No channels yet. An administrator can check endpoint health and refresh the lineup in Devices."
-        : "No endpoints connected yet. An administrator can add your tuner or emulator in Devices."
+        ? "No channels yet. Check the endpoint connection in Devices, then refresh the lineup."
+        : "No devices connected yet. An administrator can add a tuner or emulator in Devices."
       : "No channels match these filters.";
-    $("guide-time").textContent = new Date(
-      (Math.floor(Date.now() / 1000 / 10800) * 10800 + state.offset) * 1000,
-    ).toLocaleString([], {
-      weekday: "short",
-      hour: "numeric",
-      minute: "2-digit",
-    });
+    $("page-range").textContent = list.length
+      ? `${(state.page * 60 + 1).toLocaleString()}–${(state.page * 60 + page.length).toLocaleString()} of ${list.length.toLocaleString()}`
+      : "0 channels";
+    $("page-previous").disabled = state.page === 0;
+    $("page-next").disabled = (state.page + 1) * 60 >= list.length;
     const start = Math.floor(Date.now() / 1000 / 10800) * 10800 + state.offset;
     const end = start + 10800;
-    $("channel-list").innerHTML = list
+    const now = Date.now() / 1000;
+    $("guide-time").textContent =
+      new Date(start * 1000).toLocaleString([], {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      }) +
+      " · " +
+      clock(start) +
+      "–" +
+      clock(end);
+    let body = page
       .map((c) => {
         const p = nowProgramme(c);
-        const star = `<button class="star" data-favorite="${esc(c.id)}" aria-label="${state.favorites[c.id] ? "Remove" : "Add"} ${esc(c.name)} ${state.favorites[c.id] ? "from" : "to"} favorites" aria-pressed="${!!state.favorites[c.id]}">${state.favorites[c.id] ? "★" : "☆"}</button>`;
+        const selected = state.selected?.id === c.id;
         if (guide) {
           const programs = state.programs.filter(
             (p) =>
               p.channelId === c.id && p.startUnix < end && p.endUnix > start,
           );
-          return `<article class="guide-row"><div class="guide-title"><span class="number">${esc(c.number)}</span><button data-channel="${esc(c.id)}"><strong>${esc(c.name)}</strong></button>${star}</div><div class="programme-rail">${programs.length ? programs.map((p) => `<button class="programme ${p.startUnix <= Date.now() / 1000 && p.endUnix > Date.now() / 1000 ? "live" : ""}" data-program="${esc(p.id)}"><time>${clock(p.startUnix)}–${clock(p.endUnix)}</time><strong>${esc(p.title)}</strong>${p.isLive ? '<span class="badge">LIVE</span>' : ""}</button>`).join("") : '<span class="muted">No programme data in this window.</span>'}</div></article>`;
+          const cells = programs
+            .map((p) => {
+              const left =
+                ((Math.max(p.startUnix, start) - start) / 10800) * 100;
+              const width =
+                ((Math.min(p.endUnix, end) - Math.max(p.startUnix, start)) /
+                  10800) *
+                100;
+              return `<button class="programme ${p.startUnix <= now && p.endUnix > now ? "live" : ""}" data-program="${esc(p.id)}" style="left:${left}%;width:calc(${width}% - 4px)" title="${esc(p.title)}" aria-label="${esc(c.name + " · " + p.title + " · " + clock(p.startUnix) + "–" + clock(p.endUnix))}"><strong>${esc(p.title)}</strong><time>${clock(p.startUnix)}–${clock(p.endUnix)}</time></button>`;
+            })
+            .join("");
+          const marker =
+            now >= start && now < end
+              ? `<span class="guide-now" style="left:${((now - start) / 10800) * 100}%" aria-hidden="true"></span>`
+              : "";
+          return `<article class="guide-row ${selected ? "selected" : ""}"><div class="guide-title"><button class="channel-main" data-channel="${esc(c.id)}" aria-label="${esc(c.number + " " + c.name)}">${logo(c)}<span class="channel-name"><strong>${esc(c.name)}</strong><small>${esc(c.number)}</small></span></button>${star(c)}</div><div class="programme-rail">${cells || '<span class="programme-empty">Programme information unavailable</span>'}${marker}</div></article>`;
         }
         const pct = p
           ? Math.max(
               0,
               Math.min(
                 100,
-                ((Date.now() / 1000 - p.startUnix) /
-                  (p.endUnix - p.startUnix)) *
-                  100,
+                ((now - p.startUnix) / (p.endUnix - p.startUnix)) * 100,
               ),
             )
           : 0;
-        return `<article class="channel-row"><span class="number">${esc(c.number)}</span><button class="channel-main" data-channel="${esc(c.id)}"><strong>${esc(c.name)}${c.protected ? " · Protected" : ""}</strong><span>${p ? esc(p.title) : "No programme information"}</span>${p ? `<div class="progress" aria-hidden="true"><i style="width:${pct}%"></i></div>` : ""}</button>${star}</article>`;
+        return `<article class="channel-row ${selected ? "selected" : ""}"><button class="channel-main" data-channel="${esc(c.id)}" aria-label="${esc(c.number + " " + c.name)}">${logo(c)}<span class="channel-name"><strong>${esc(c.name)}</strong><small>${esc(c.number)}${c.protected ? " · Protected" : c.sources.length > 1 ? " · " + c.sources.length + " sources" : ""}</small></span><span class="channel-program"><strong>${p ? esc(p.title) : "Programme unavailable"}</strong>${p ? "<small>" + clock(p.startUnix) + "–" + clock(p.endUnix) + '</small><span class="progress" aria-hidden="true"><i style="width:' + pct + '%"></i></span>' : "<small>Watch live for this channel</small>"}</span></button>${star(c)}</article>`;
       })
       .join("");
+    if (guide && page.length) {
+      let times = "";
+      for (let offset = 0; offset < 10800; offset += 1800)
+        times += `<time style="left:${(offset / 10800) * 100}%">${clock(start + offset)}</time>`;
+      body = `<div class="guide-grid"><div class="guide-heading"><span>Channel</span><div class="guide-hours">${times}</div></div>${body}</div>`;
+    }
+    $("channel-list").innerHTML = body;
+    $("channel-list")
+      .querySelectorAll("img")
+      .forEach(
+        (img) =>
+          (img.onerror = () => {
+            const el = img.parentElement;
+            el.textContent =
+              el
+                .closest("[data-channel]")
+                ?.getAttribute("aria-label")
+                ?.split(" ")[0] || "";
+          }),
+      );
+    renderGroups();
+  }
+  function closeDetail() {
+    stopPlayer();
+    state.selected = null;
+    document.body.classList.remove("detail-open");
+    $("detail").innerHTML =
+      '<div class="player-placeholder">' +
+      icon("tv") +
+      "<h2>Select a channel</h2><p>See what’s on and start watching.</p></div>";
+    renderChannels();
   }
   function selectChannel(c, p) {
     state.selected = c;
     if (!p) p = nowProgramme(c);
+    document.body.classList.add("detail-open");
     const active = state.session && $("video");
     if (!active)
       $("detail").innerHTML =
-        '<video id="video" controls playsinline hidden></video><div id="play-status" role="status" hidden></div><div class="detail-body" id="detail-body"></div>';
+        '<div class="detail-header"><span>Live TV</span><div class="actions"><button id="stop" hidden>Stop</button><button class="icon-button" id="detail-close" aria-label="Close channel details">' +
+        icon("close") +
+        '</button></div></div><video id="video" controls playsinline hidden></video><div id="play-status" role="status" hidden></div><div class="detail-body" id="detail-body"></div>';
     $("detail-body").innerHTML =
-      `<span class="eyebrow">${esc(c.number)} · ${esc(c.name)}</span><h2>${esc(p?.title || c.name)}</h2>${p ? `<span class="muted">${clock(p.startUnix)}–${clock(p.endUnix)}</span><p>${esc(p.summary || "")}</p>` : "<p>Programme information is unavailable. You can still watch this channel.</p>"}<p>${esc(c.sources.map((s) => s.name).join(" · "))}</p><div class="actions"><button class="primary" id="watch" ${c.protected ? "disabled" : ""}>${c.protected ? "Protected channel" : "▶ Watch live"}</button><button id="stop" ${!state.session ? "hidden" : ""}>Stop</button></div>`;
+      `<h2>${esc(c.name)}</h2><span class="detail-channel">${esc(c.number)} · ${esc(c.sources.map((s) => s.name).join(" · "))}</span><div class="detail-programme">${p ? `<strong>${esc(p.title)}</strong><time>${clock(p.startUnix)}–${clock(p.endUnix)}</time><p>${esc(p.summary || "")}</p>` : "<strong>Programme information unavailable</strong><p>You can still watch this channel live.</p>"}</div><div class="actions"><button class="primary" id="watch" ${c.protected ? "disabled" : ""}>${icon("play")}${c.protected ? "Protected channel" : "Watch live"}</button></div>`;
     $("watch").onclick = () => play(c);
     $("stop").onclick = () => stopPlayer();
+    $("detail-close").onclick = closeDetail;
+    renderChannels();
   }
   async function loadScript(name) {
     if (document.querySelector(`script[data-library="${name}"]`)) return;
@@ -440,20 +574,24 @@
   }
   async function loadGuide() {
     const start = Math.floor(Date.now() / 1000 / 10800) * 10800 + state.offset;
-    const ids = visible().map((c) => c.id);
-    const out = [];
-    for (let i = 0; i < ids.length; i += 100) {
-      const result = await api(
-        "/api/guide?start=" +
-          start +
-          "&end=" +
-          (start + 10800) +
-          "&channel_ids=" +
-          encodeURIComponent(ids.slice(i, i + 100).join(",")),
-      );
-      out.push(...result.programs);
+    const ids = pageChannels().map((c) => c.id);
+    const key = JSON.stringify([start, ids]);
+    state.guideRequest = key;
+    if (!ids.length) {
+      state.programs = [];
+      renderChannels();
+      return;
     }
-    state.programs = out;
+    const result = await api(
+      "/api/guide?start=" +
+        start +
+        "&end=" +
+        (start + 10800) +
+        "&channel_ids=" +
+        encodeURIComponent(ids.join(",")),
+    );
+    if (state.guideRequest !== key) return;
+    state.programs = result.programs || [];
     renderChannels();
   }
   async function loadState() {
@@ -473,7 +611,13 @@
       endpoints: data.endpoints || [],
     });
     $("devices-tab").hidden = !data.admin;
-    $("devices-tab").href = base + "/admin";
+    const theme = encodeURIComponent(
+      document.documentElement.dataset.siloTheme || "midnight-cinema",
+    );
+    $("devices-tab").href = base + "/admin?theme=" + theme;
+    $("manage-devices").hidden = !data.admin;
+    $("manage-devices").href = base + "/admin?theme=" + theme;
+    $("admin-channels").href = base + "?theme=" + theme + "#channels";
     $("connection").textContent = data.refreshing
       ? "Refreshing…"
       : state.endpoints.filter((e) => e.enabled && !e.error).length +
@@ -663,25 +807,52 @@
       if (c) selectChannel(c, program);
     }
   };
+  let searchTimer;
   $("search").oninput = (event) => {
     state.search = event.target.value.toLowerCase();
+    state.page = 0;
     renderChannels();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(
+      () => loadGuide().catch((e) => notice(e.message)),
+      200,
+    );
   };
-  $("source").onchange = async (event) => {
-    state.source = event.target.value;
-    renderChannels();
-    try {
-      await loadGuide();
-    } catch (e) {
-      notice(e.message);
-    }
-  };
-  $("favorites").onclick = () => {
-    state.onlyFavorites = !state.onlyFavorites;
-    $("favorites").setAttribute("aria-pressed", String(state.onlyFavorites));
+  function chooseSource(id) {
+    state.source = id;
+    state.page = 0;
+    state.onlyFavorites = false;
+    $("source").value = id;
+    if (location.hash === "#favorites") location.hash = "#channels";
     renderChannels();
     loadGuide().catch((e) => notice(e.message));
+  }
+  $("source").onchange = (event) => chooseSource(event.target.value);
+  $("source-groups").onclick = (event) => {
+    const button = event.target.closest("[data-source]");
+    if (button) chooseSource(button.dataset.source);
   };
+  $("all-channels").onclick = () => chooseSource("");
+  $("favorites").onclick = () => {
+    state.source = "";
+    $("source").value = "";
+    if (location.hash === "#favorites") {
+      state.onlyFavorites = true;
+      state.page = 0;
+      renderChannels();
+      loadGuide().catch((e) => notice(e.message));
+    } else location.hash = "#favorites";
+  };
+  for (const [id, delta] of [
+    ["page-previous", -1],
+    ["page-next", 1],
+  ])
+    $(id).onclick = () => {
+      state.page = Math.max(0, state.page + delta);
+      $("channel-scroll").scrollTop = 0;
+      renderChannels();
+      loadGuide().catch((e) => notice(e.message));
+    };
   for (const [id, offset] of [
     ["previous", -10800],
     ["next", 10800],
@@ -695,6 +866,8 @@
       loadGuide().catch((e) => notice(e.message));
     };
   window.onhashchange = () => {
+    state.onlyFavorites = location.hash === "#favorites";
+    state.page = 0;
     renderChannels();
     loadGuide().catch((e) => notice(e.message));
   };
@@ -708,11 +881,23 @@
     }
   });
   async function start() {
+    state.onlyFavorites = location.hash === "#favorites";
+    const theme = encodeURIComponent(
+      document.documentElement.dataset.siloTheme || "midnight-cinema",
+    );
+    for (const [id, file] of [
+      ["hls-license", "hls.LICENSE"],
+      ["mpegts-license", "mpegts.LICENSE"],
+      ["font-license", "font.LICENSE"],
+    ])
+      $(id).href = base + "/assets/" + file;
+    document.body.classList.toggle("is-admin", adminPage);
     $("admin").hidden = !adminPage;
     $("viewer").hidden = adminPage;
     if (adminPage) {
-      $("channels-tab").href = base + "#channels";
-      $("guide-tab").href = base + "#guide";
+      $("channels-tab").href = base + "?theme=" + theme + "#channels";
+      $("guide-tab").href = base + "?theme=" + theme + "#guide";
+      $("favorites-tab").href = base + "?theme=" + theme + "#favorites";
       $("devices-tab").setAttribute("aria-current", "page");
     }
     try {

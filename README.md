@@ -7,13 +7,14 @@ Live TV from multiple physical or emulated HDHomeRun HTTP endpoints, built for t
 - Optional station mappings combine equivalent channels, with priority and tuner-aware failover before playback starts.
 - Per-endpoint tuner reservations, atomic capacity checks, 90-second leases, viewer ownership, heartbeats, and stop/disconnect cleanup.
 - XMLTV/XMLTV.gz or the SiliconDust guide; retained lineup and guide during outages.
-- Channels, three-hour guide browsing, profile favorites, admin endpoint health and channel mapping.
+- Silo-themed channel browsing, a three-hour timeline guide, profile favorites, admin endpoint health and channel mapping.
+- The existing Live TV navigation and source sidebar, with 60-channel pages to keep large lineups responsive.
 - MPEG-TS and HLS playback through a private loopback gateway. HLS playlists, keys, nested playlists, and media stay behind Silo authentication.
 
 ## Install and configure
 
 1. Build the companion Silo fork with the generic loopback HTTP stream relay in `internal/plugins/http_proxy_relay.go`. Native compatible TV clients use the existing Live TV contract; the embedded browser player needs this relay.
-2. Upload the matching `dist/hdhomerun-0.1.1-<os>-<arch>.silo-plugin.zip` in Silo's plugin administration.
+2. Upload the matching `dist/hdhomerun-0.2.0-<os>-<arch>.silo-plugin.zip` in Silo's plugin administration.
 3. Open **HDHomeRun Devices**, add a name and base address, then save. For a real tuner, use `http://192.168.1.30`. For Dispatcharr, use its HDHR base, normally `https://your-dispatcharr/hdhr`, or its exported channel/output profile base.
 4. The Silo server must reach both `discover.json` and the advertised lineup and media URLs. A reverse proxy or the source's network access rules must admit the server.
 5. Choose **No guide**, **SiliconDust guide**, or **XMLTV URL** independently for each endpoint. An emulator normally uses XMLTV. You may instead put a guide URL in a server-side file and set **XMLTV URL file**; never configure both.
@@ -50,6 +51,8 @@ Requires Go 1.26 and Node 22+ for verification.
 ./scripts/build-release.sh
 # Two local emulators, a local admin identity, in-memory settings:
 go run ./cmd/dev
+# A larger lineup for paging/layout checks:
+go run ./cmd/dev -channels 120
 ```
 
 The dev harness binds only a loopback listener and must never be deployed. Without `-media-dir`, it exercises setup/lineup/guide and reports stream unavailability. For actual browser video, generate HLS and a TS fixture with FFmpeg:

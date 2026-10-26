@@ -1,6 +1,6 @@
 {
   "plugin_id": "silo.ramindex.hdhomerun",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "supported_platforms": [
@@ -201,6 +201,48 @@
       "id": "hdhr-license-mpegts.LICENSE",
       "method": "GET",
       "path": "/hdhomerun/assets/mpegts.LICENSE",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-asset-theme-js",
+      "method": "GET",
+      "path": "/hdhomerun/assets/theme.js",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-asset-font-LICENSE",
+      "method": "GET",
+      "path": "/hdhomerun/assets/font.LICENSE",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-asset-plus-jakarta-sans-latin-wght-normal-woff2",
+      "method": "GET",
+      "path": "/hdhomerun/assets/plus-jakarta-sans-latin-wght-normal.woff2",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-asset-plus-jakarta-sans-latin-ext-wght-normal-woff2",
+      "method": "GET",
+      "path": "/hdhomerun/assets/plus-jakarta-sans-latin-ext-wght-normal.woff2",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-asset-plus-jakarta-sans-vietnamese-wght-normal-woff2",
+      "method": "GET",
+      "path": "/hdhomerun/assets/plus-jakarta-sans-vietnamese-wght-normal.woff2",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "hdhr-asset-plus-jakarta-sans-cyrillic-ext-wght-normal-woff2",
+      "method": "GET",
+      "path": "/hdhomerun/assets/plus-jakarta-sans-cyrillic-ext-wght-normal.woff2",
       "access": "authenticated",
       "navigable": false
     }

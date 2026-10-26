@@ -2,9 +2,12 @@ package plugin
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"html"
 	"net/url"
 	"sort"
 	"strconv"
@@ -20,6 +23,41 @@ import (
 
 //go:embed ui/* assets/*
 var files embed.FS
+
+var assetVersion = func() string {
+	h := sha256.New()
+	for _, name := range []string{"ui/index.html", "ui/app.js", "ui/app.css", "ui/theme.js"} {
+		b, _ := files.ReadFile(name)
+		_, _ = h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}()
+
+func page(r *pluginv1.HandleHTTPRequest) []byte {
+	theme := header(r, "X-Silo-Theme")
+	if theme == "" {
+		theme = query(r, "theme")
+	}
+	if len(theme) > 64 {
+		theme = ""
+	}
+	for _, c := range theme {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			theme = ""
+			break
+		}
+	}
+	prefix := "assets"
+	if r.GetPath() == "/hdhomerun" {
+		prefix = "hdhomerun/assets"
+	}
+	class := "is-viewer"
+	if r.GetPath() == "/hdhomerun/admin" {
+		class = "is-admin"
+	}
+	b, _ := files.ReadFile("ui/index.html")
+	return []byte(strings.NewReplacer("__SILO_THEME__", html.EscapeString(theme), "__ASSET_PREFIX__", prefix, "__ASSET_VERSION__", assetVersion, "__PAGE_CLASS__", class).Replace(string(b)))
+}
 
 type Server struct {
 	pluginv1.UnimplementedHttpRoutesServer
@@ -84,7 +122,7 @@ func (s *Server) Handle(_ context.Context, r *pluginv1.HandleHTTPRequest) (*plug
 		return response(403, map[string]string{"error": "Administrator access required."}), nil
 	}
 	if m == "GET" && (p == "/hdhomerun" || p == "/hdhomerun/" || p == "/hdhomerun/admin") {
-		b, _ := files.ReadFile("ui/index.html")
+		b := page(r)
 		return &pluginv1.HandleHTTPResponse{StatusCode: 200, Headers: map[string]string{"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}, Body: b}, nil
 	}
 	if m == "GET" && strings.HasPrefix(p, "/hdhomerun/assets/") {
@@ -93,12 +131,15 @@ func (s *Server) Handle(_ context.Context, r *pluginv1.HandleHTTPRequest) (*plug
 		dir := "ui/"
 		if name == "app.css" {
 			contentType = "text/css; charset=utf-8"
-		} else if name == "hls.min.js" || name == "mpegts.min.js" || name == "hls.LICENSE" || name == "mpegts.LICENSE" {
+		} else if name == "hls.min.js" || name == "mpegts.min.js" || name == "hls.LICENSE" || name == "mpegts.LICENSE" || name == "font.LICENSE" || strings.HasPrefix(name, "plus-jakarta-sans-") && strings.HasSuffix(name, ".woff2") {
 			dir = "assets/"
+			if strings.HasSuffix(name, ".woff2") {
+				contentType = "font/woff2"
+			}
 			if strings.HasSuffix(name, ".LICENSE") {
 				contentType = "text/plain; charset=utf-8"
 			}
-		} else if name != "app.js" {
+		} else if name != "app.js" && name != "theme.js" {
 			return response(404, map[string]string{"error": "Not found"}), nil
 		}
 		b, err := files.ReadFile(dir + name)
