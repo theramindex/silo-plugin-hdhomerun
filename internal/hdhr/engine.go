@@ -52,18 +52,21 @@ type source struct {
 	Priority                                    int
 }
 type EndpointStatus struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Enabled         bool   `json:"enabled"`
-	DeviceID        string `json:"deviceId,omitempty"`
-	Model           string `json:"model,omitempty"`
-	TunerCount      int    `json:"tunerCount"`
-	InUse           int    `json:"inUse"`
-	ChannelCount    int    `json:"channelCount"`
-	ProgramCount    int    `json:"programCount"`
-	LastSuccessUnix int64  `json:"lastSuccessUnix,omitempty"`
-	Error           string `json:"error,omitempty"`
-	GuideError      string `json:"guideError,omitempty"`
+	CapacityGroup    string `json:"capacityGroup,omitempty"`
+	SharedInUse      int    `json:"sharedInUse,omitempty"`
+	SharedTunerLimit int    `json:"sharedTunerLimit,omitempty"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Enabled          bool   `json:"enabled"`
+	DeviceID         string `json:"deviceId,omitempty"`
+	Model            string `json:"model,omitempty"`
+	TunerCount       int    `json:"tunerCount"`
+	InUse            int    `json:"inUse"`
+	ChannelCount     int    `json:"channelCount"`
+	ProgramCount     int    `json:"programCount"`
+	LastSuccessUnix  int64  `json:"lastSuccessUnix,omitempty"`
+	Error            string `json:"error,omitempty"`
+	GuideError       string `json:"guideError,omitempty"`
 }
 type Snapshot struct {
 	Channels      []Channel        `json:"channels"`
@@ -292,7 +295,7 @@ func (e *Engine) Refresh(ctx context.Context) error {
 						d.Error = ""
 						d.LastSuccessUnix = time.Now().Unix()
 						if endpoint.GuideMode != "none" && d.NextGuideUnix <= time.Now().Unix() {
-							guide, delay, guideErr := fetchGuide(ctx, endpoint, discovery)
+							guide, delay, guideErr := fetchGuide(ctx, endpoint, discovery, lineup)
 							if guideErr == nil {
 								d.Guide = guide
 								d.GuideError = ""
@@ -382,6 +385,10 @@ func (e *Engine) rebuildLocked() {
 		d := e.devices[endpoint.ID]
 		if d.client == nil {
 			continue
+		}
+		if d.Guide.names == nil {
+			d.Guide.names = guideNames(d.Guide.Channels)
+			e.devices[endpoint.ID] = d
 		}
 		guidePrograms := map[string][]Program{}
 		for _, program := range d.Guide.Programs {
@@ -485,6 +492,10 @@ func (e *Engine) Snapshot() Snapshot {
 				status.InUse++
 			}
 		}
+		if endpoint.CapacityGroup != "" {
+			status.CapacityGroup = endpoint.CapacityGroup
+			status.SharedInUse, status.SharedTunerLimit = e.sharedCapacityUsageLocked(endpoint, nil)
+		}
 		out.Endpoints = append(out.Endpoints, status)
 	}
 	return out
@@ -518,3 +529,5 @@ func (e *Engine) expireLocked() {
 		}
 	}
 }
+
+func (e *Engine) DataDir() string { return e.dir }

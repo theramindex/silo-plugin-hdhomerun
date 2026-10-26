@@ -7,11 +7,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	sharedhttp "github.com/theramindex/silo-plugins/pkg/livemedia/httpclient"
+	mediaweb "github.com/theramindex/silo-plugins/pkg/livemedia/web"
 	"html"
+	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
@@ -62,7 +67,9 @@ func page(r *pluginv1.HandleHTTPRequest) []byte {
 type Server struct {
 	pluginv1.UnimplementedHttpRoutesServer
 	pluginv1.UnimplementedScheduledTaskServer
-	Engine *hdhr.Engine
+	Engine    *hdhr.Engine
+	mediaOnce sync.Once
+	media     *mediaweb.Controller
 }
 
 func header(r *pluginv1.HandleHTTPRequest, key string) string {
@@ -112,8 +119,11 @@ func problem(err error) *pluginv1.HandleHTTPResponse {
 	}
 	return response(code, map[string]string{"code": label, "error": err.Error()})
 }
-func (s *Server) Handle(_ context.Context, r *pluginv1.HandleHTTPRequest) (*pluginv1.HandleHTTPResponse, error) {
+func (s *Server) Handle(ctx context.Context, r *pluginv1.HandleHTTPRequest) (*pluginv1.HandleHTTPResponse, error) {
 	p, m := r.GetPath(), r.GetMethod()
+	if mediaweb.Handles("/hdhomerun", p) {
+		return s.mediaController().Handle(ctx, r), nil
+	}
 	isAdmin := header(r, "X-Silo-User-Role") == "admin"
 	if owner(r) == "" && !strings.HasPrefix(p, "/silo-compat/livetv/v1/") {
 		return response(401, map[string]string{"error": "Sign in to Silo to continue."}), nil
@@ -304,4 +314,22 @@ func (s *Server) Run(ctx context.Context, r *pluginv1.RunScheduledTaskRequest) (
 	snap := s.Engine.Snapshot()
 	out, _ := structpb.NewStruct(map[string]any{"channels": len(snap.Channels), "endpoints": len(snap.Endpoints)})
 	return &pluginv1.RunScheduledTaskResponse{Output: out}, nil
+}
+
+func (s *Server) mediaController() *mediaweb.Controller {
+	s.mediaOnce.Do(func() {
+		s.media = mediaweb.New(mediaweb.Config{Prefix: "/hdhomerun", Root: filepath.Join(s.Engine.DataDir(), "media"), Resolve: func(ctx context.Context, channel, viewer, id string) (mediaweb.Input, error) {
+			stream, err := s.Engine.Resolve(channel, id, viewer, "any")
+			if err != nil {
+				return mediaweb.Input{}, err
+			}
+			client := sharedhttp.NewRestricted("127.0.0.1")
+			client.Timeout = 0
+			if tr, ok := client.Transport.(*http.Transport); ok {
+				tr.ResponseHeaderTimeout = 10 * time.Second
+			}
+			return mediaweb.Input{URL: stream.URL, Container: stream.Container, Client: client, Release: func() { s.Engine.Stop(id, viewer) }, Heartbeat: func() error { return s.Engine.Heartbeat(id, viewer) }}, nil
+		}})
+	})
+	return s.media
 }

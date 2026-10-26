@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"golang.org/x/text/cases"
 	"io"
 	"net/http"
 	"net/url"
@@ -42,6 +43,7 @@ func (p Program) ForChannel(id string) Program {
 }
 
 type Guide struct {
+	names    map[string]string
 	Channels map[string][]string `json:"channels"`
 	Logos    map[string]string   `json:"logos"`
 	Programs []Program           `json:"programs"`
@@ -54,16 +56,17 @@ func (g Guide) MatchChannel(ch LineupChannel) string {
 	if _, ok := g.Channels[ch.Number]; ok {
 		return ch.Number
 	}
+	names := g.names
+	if names == nil {
+		names = guideNames(g.Channels)
+	}
 	found := ""
-	for id, names := range g.Channels {
-		match := false
-		for _, name := range names {
-			if strings.EqualFold(strings.TrimSpace(name), ch.Number) || strings.EqualFold(strings.TrimSpace(name), ch.Name) {
-				match = true
-				break
-			}
+	for _, name := range []string{ch.Number, ch.Name} {
+		id := names[foldGuideName(name)]
+		if id == "\x00" {
+			return ""
 		}
-		if match {
+		if id != "" {
 			if found != "" && found != id {
 				return ""
 			}
@@ -72,7 +75,26 @@ func (g Guide) MatchChannel(ch LineupChannel) string {
 	}
 	return found
 }
-func fetchGuide(ctx context.Context, ep Endpoint, d Discovery) (Guide, time.Duration, error) {
+func foldGuideName(name string) string { return cases.Fold().String(strings.TrimSpace(name)) }
+func guideNames(channels map[string][]string) map[string]string {
+	index := map[string]string{}
+	for id, names := range channels {
+		for _, name := range names {
+			key := foldGuideName(name)
+			if key == "" {
+				continue
+			}
+			if old, ok := index[key]; ok && old != id {
+				index[key] = "\x00"
+			} else {
+				index[key] = id
+			}
+		}
+	}
+	return index
+}
+
+func fetchGuide(ctx context.Context, ep Endpoint, d Discovery, lineup []LineupChannel) (Guide, time.Duration, error) {
 	raw := ep.GuideURL
 	delay := 6 * time.Hour
 	if ep.GuideURLFile != "" {
@@ -129,16 +151,34 @@ func fetchGuide(ctx context.Context, ep Endpoint, d Discovery) (Guide, time.Dura
 		defer gz.Close()
 		reader = gz
 	}
-	guide, err := ParseGuide(reader, time.Now())
+	guide, err := parseGuide(reader, time.Now(), lineup, ep.Channels)
 	if err != nil {
 		return Guide{}, 0, err
 	}
 	return guide, delay, nil
 }
 func ParseGuide(reader io.Reader, now time.Time) (Guide, error) {
-	const maxBytes = 32 << 20
+	return parseGuide(reader, now, nil, nil)
+}
+
+func parseGuide(reader io.Reader, now time.Time, lineup []LineupChannel, mappings map[string]ChannelMapping) (Guide, error) {
+	const maxBytes = 256 << 20
 	bounded := &io.LimitedReader{R: reader, N: maxBytes + 1}
 	dec := xml.NewDecoder(bounded)
+	var retained map[string]bool
+	wantedNames := map[string]bool{}
+	if lineup != nil {
+		retained = map[string]bool{}
+		for _, channel := range lineup {
+			for _, id := range []string{channel.GuideID, channel.Number, mappings[channel.Number].GuideID} {
+				if id != "" {
+					retained[id] = true
+				}
+			}
+			wantedNames[foldGuideName(channel.Name)] = true
+			wantedNames[foldGuideName(channel.Number)] = true
+		}
+	}
 	g := Guide{Channels: map[string][]string{}, Logos: map[string]string{}, Programs: []Program{}}
 	root := false
 	closed := false
@@ -151,7 +191,7 @@ func ParseGuide(reader io.Reader, now time.Time) (Guide, error) {
 			return Guide{}, errors.New("invalid or oversized XMLTV guide")
 		}
 		if bounded.N <= 0 {
-			return Guide{}, errors.New("XMLTV guide exceeds 32 MiB")
+			return Guide{}, errors.New("XMLTV guide exceeds 256 MiB")
 		}
 		if end, ok := token.(xml.EndElement); ok && end.Name.Local == "tv" {
 			closed = true
@@ -188,11 +228,32 @@ func ParseGuide(reader io.Reader, now time.Time) (Guide, error) {
 			}
 			if ch.ID != "" {
 				g.Channels[ch.ID] = ch.Names
+				if retained != nil {
+					for _, name := range ch.Names {
+						if wantedNames[foldGuideName(name)] {
+							retained[ch.ID] = true
+							break
+						}
+					}
+				}
 				if _, err := ParseHTTPURL(ch.Icon.Src); err == nil {
 					g.Logos[ch.ID] = ch.Icon.Src
 				}
 			}
 		case "programme":
+			channelID := ""
+			for _, attribute := range start.Attr {
+				if attribute.Name.Local == "channel" {
+					channelID = attribute.Value
+					break
+				}
+			}
+			if retained != nil && !retained[channelID] {
+				if err := dec.Skip(); err != nil {
+					return Guide{}, errors.New("invalid XMLTV programme")
+				}
+				continue
+			}
 			var entry struct {
 				Channel     string    `xml:"channel,attr"`
 				Start       string    `xml:"start,attr"`
@@ -214,7 +275,7 @@ func ParseGuide(reader io.Reader, now time.Time) (Guide, error) {
 			if err1 != nil || err2 != nil || !to.After(from) || entry.Channel == "" || entry.Title == "" || to.Before(now.Add(-24*time.Hour)) || from.After(now.Add(15*24*time.Hour)) {
 				continue
 			}
-			if len(g.Programs) >= 100000 {
+			if len(g.Programs) >= 1000000 {
 				return Guide{}, errors.New("too many XMLTV programmes")
 			}
 			p := Program{ChannelID: entry.Channel, Title: limitText(entry.Title, 512), Summary: limitText(entry.Description, 8192), StartUnix: from.Unix(), EndUnix: to.Unix(), Categories: entry.Categories, IsSeries: entry.Episode != "", IsLive: entry.Live != nil}
@@ -249,6 +310,26 @@ func ParseGuide(reader io.Reader, now time.Time) (Guide, error) {
 	}
 	if !root || !closed || bounded.N <= 0 {
 		return Guide{}, errors.New("invalid or oversized XMLTV guide")
+	}
+	g.names = guideNames(g.Channels)
+	if lineup != nil {
+		selected := map[string]bool{}
+		for _, channel := range lineup {
+			id := mappings[channel.Number].GuideID
+			if id == "" {
+				id = g.MatchChannel(channel)
+			}
+			if id != "" {
+				selected[id] = true
+			}
+		}
+		programs := g.Programs[:0]
+		for _, program := range g.Programs {
+			if selected[program.ChannelID] {
+				programs = append(programs, program)
+			}
+		}
+		g.Programs = programs
 	}
 	return g, nil
 }

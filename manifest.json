@@ -1,6 +1,6 @@
 {
   "plugin_id": "silo.ramindex.hdhomerun",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "supported_platforms": [
@@ -244,6 +244,76 @@
       "method": "GET",
       "path": "/hdhomerun/assets/plus-jakarta-sans-cyrillic-ext-wght-normal.woff2",
       "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "shared-media-api-media-start",
+      "path": "/hdhomerun/api/media/start",
+      "method": "POST",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "shared-media-api-media-status",
+      "path": "/hdhomerun/api/media/status",
+      "method": "GET",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "shared-media-api-media-stop",
+      "path": "/hdhomerun/api/media/stop",
+      "method": "POST",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "shared-media-relay-media",
+      "path": "/hdhomerun/relay/media",
+      "method": "GET",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "shared-media-converted-media",
+      "path": "/hdhomerun/converted/media",
+      "method": "GET",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "shared-media-rewind-manifest",
+      "path": "/hdhomerun/rewind/manifest",
+      "method": "GET",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "shared-media-rewind-segment",
+      "path": "/hdhomerun/rewind/segment",
+      "method": "GET",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "shared-media-assets-media-js",
+      "path": "/hdhomerun/assets/media.js",
+      "method": "GET",
+      "access": "authenticated",
+      "navigable": false
+    },
+    {
+      "id": "shared-api-media-admin-status",
+      "path": "/hdhomerun/api/media/admin-status",
+      "method": "GET",
+      "access": "admin",
+      "navigable": false
+    },
+    {
+      "id": "shared-api-media-clear",
+      "path": "/hdhomerun/api/media/clear",
+      "method": "POST",
+      "access": "admin",
       "navigable": false
     }
   ],

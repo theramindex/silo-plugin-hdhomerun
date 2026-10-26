@@ -10,6 +10,7 @@
       rel="stylesheet"
       href="__ASSET_PREFIX__/app.css?v=__ASSET_VERSION__"
     />
+    <script defer src="__ASSET_PREFIX__/media.js?v=__ASSET_VERSION__"></script>
     <script defer src="__ASSET_PREFIX__/app.js?v=__ASSET_VERSION__"></script>
   </head>
   <body class="__PAGE_CLASS__">
@@ -104,6 +105,8 @@
     </header>
     <div id="notice" role="status" hidden></div>
     <main id="viewer">
+<section id="recent-channels" class="recent-channels" aria-label="Recently watched" hidden></section>
+<section id="multiview" class="multiview" aria-label="Multiview" hidden><header><h2>Multiview</h2><button id="multiview-close" type="button">Stop all</button></header><div id="multiview-grid" class="multiview-grid"></div></section>
       <div class="watch-layout">
         <aside class="channels-groups" aria-label="Channel groups">
           <div class="group-shortcuts">
@@ -366,6 +369,8 @@
               /><small
                 >0 uses the device’s advertised count; falls back to one.</small
               ></label
+            ><label>Shared server group<input name="capacity_group" maxlength="64" pattern="[a-zA-Z0-9_-]{1,64}" placeholder="Optional server key"><small>Use the same key for lineups sharing one tuner or emulator.</small></label
+            ><label>Shared tuner limit<input name="shared_tuner_limit" type="number" min="0" max="64" value="0"><small>Maximum streams across this group. 0 uses the smallest advertised count.</small></label
             ><label
               >Priority<input
                 name="priority"

@@ -16,17 +16,19 @@ type Config struct {
 	Endpoints []Endpoint `json:"endpoints"`
 }
 type Endpoint struct {
-	ID           string                    `json:"id"`
-	Name         string                    `json:"name"`
-	URL          string                    `json:"url"`
-	Enabled      *bool                     `json:"enabled,omitempty"`
-	TunerLimit   int                       `json:"tuner_limit,omitempty"`
-	Priority     int                       `json:"priority,omitempty"`
-	AllowedHosts []string                  `json:"allowed_hosts,omitempty"`
-	GuideMode    string                    `json:"guide_mode,omitempty"`
-	GuideURL     string                    `json:"guide_url,omitempty"`
-	GuideURLFile string                    `json:"guide_url_file,omitempty"`
-	Channels     map[string]ChannelMapping `json:"channels,omitempty"`
+	ID               string                    `json:"id"`
+	Name             string                    `json:"name"`
+	URL              string                    `json:"url"`
+	Enabled          *bool                     `json:"enabled,omitempty"`
+	CapacityGroup    string                    `json:"capacity_group,omitempty"`
+	SharedTunerLimit int                       `json:"shared_tuner_limit,omitempty"`
+	TunerLimit       int                       `json:"tuner_limit,omitempty"`
+	Priority         int                       `json:"priority,omitempty"`
+	AllowedHosts     []string                  `json:"allowed_hosts,omitempty"`
+	GuideMode        string                    `json:"guide_mode,omitempty"`
+	GuideURL         string                    `json:"guide_url,omitempty"`
+	GuideURLFile     string                    `json:"guide_url_file,omitempty"`
+	Channels         map[string]ChannelMapping `json:"channels,omitempty"`
 }
 type ChannelMapping struct {
 	StationID string `json:"station_id,omitempty"`
@@ -70,6 +72,9 @@ func (c Config) Normalize() (Config, error) {
 			return Config{}, errors.New("device address must be an HTTP(S) base URL without credentials, query or fragment")
 		}
 		e.URL = strings.TrimRight(u.String(), "/")
+		if (e.CapacityGroup != "" && !identityPattern.MatchString(e.CapacityGroup)) || e.SharedTunerLimit < 0 || e.SharedTunerLimit > 64 || (e.SharedTunerLimit > 0 && e.CapacityGroup == "") {
+			return Config{}, errors.New("shared tuner capacity needs a valid server group and a limit from 0 to 64")
+		}
 		if e.TunerLimit < 0 || e.TunerLimit > 64 {
 			return Config{}, errors.New("tuner limit must be between 0 (automatic) and 64")
 		}

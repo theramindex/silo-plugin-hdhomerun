@@ -158,3 +158,39 @@ func TestDeviceCannotAdvertiseAnUnconfiguredHost(t *testing.T) {
 		t.Fatal("an advertised host escaped the configured endpoint")
 	}
 }
+
+func TestLineupsShareServerCapacityWithoutMergingStations(t *testing.T) {
+	var busy atomic.Bool
+	first := testDevice(t, "Profile one", 2, &busy)
+	defer first.Close()
+	second := testDevice(t, "Profile two", 2, &busy)
+	defer second.Close()
+	engine, err := NewEngine(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	config := Config{Endpoints: []Endpoint{{ID: "one", URL: first.URL, CapacityGroup: "server", SharedTunerLimit: 1}, {ID: "two", URL: second.URL, CapacityGroup: "server", SharedTunerLimit: 1}}}
+	if err = engine.Configure(config); err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	channels := engine.Snapshot().Channels
+	if len(channels) != 2 {
+		t.Fatalf("independent station identities changed: %d", len(channels))
+	}
+	if _, err = engine.Resolve(channels[0].ID, "first", "viewer", "any"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = engine.Resolve(channels[1].ID, "second", "viewer", "any"); err != ErrConnectionLimit {
+		t.Fatalf("profile bypassed parent server limit: %v", err)
+	}
+	if err = engine.Stop("first", "viewer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = engine.Resolve(channels[1].ID, "second", "viewer", "any"); err != nil {
+		t.Fatal("released capacity was not reusable", err)
+	}
+}

@@ -5,16 +5,18 @@ Live TV from multiple physical or emulated HDHomeRun HTTP endpoints, built for t
 - Explicit endpoint addresses, including URL path prefixes used by emulators.
 - Distinct channel IDs per endpoint, even when device IDs and channel numbers collide.
 - Optional station mappings combine equivalent channels, with priority and tuner-aware failover before playback starts.
-- Per-endpoint tuner reservations, atomic capacity checks, 90-second leases, viewer ownership, heartbeats, and stop/disconnect cleanup.
+- Per-endpoint and optional shared-server tuner reservations, atomic capacity checks, 90-second leases, viewer ownership, heartbeats, and stop/disconnect cleanup.
 - XMLTV/XMLTV.gz or the SiliconDust guide; retained lineup and guide during outages.
-- Silo-themed channel browsing, a three-hour timeline guide, profile favorites, admin endpoint health and channel mapping.
+- Silo-themed channel browsing, a three-hour timeline guide, profile favorites and recent channels, admin endpoint health and channel mapping.
+- Four-tile multiview, audio selection, channel switching, seek controls, Picture in Picture, fit/fill, and fullscreen.
+- GPU compatible playback and optional Live Rewind through the shared Live TV playback library.
 - The existing Live TV navigation and source sidebar, with 60-channel pages to keep large lineups responsive.
 - MPEG-TS and HLS playback through a private loopback gateway. HLS playlists, keys, nested playlists, and media stay behind Silo authentication.
 
 ## Install and configure
 
 1. Build the companion Silo fork with the generic loopback HTTP stream relay in `internal/plugins/http_proxy_relay.go`. Native compatible TV clients use the existing Live TV contract; the embedded browser player needs this relay.
-2. Upload the matching `dist/hdhomerun-0.2.0-<os>-<arch>.silo-plugin.zip` in Silo's plugin administration.
+2. Upload the matching `dist/hdhomerun-<version>-<os>-<arch>.silo-plugin.zip` in Silo's plugin administration.
 3. Open **HDHomeRun Devices**, add a name and base address, then save. For a real tuner, use `http://192.168.1.30`. For Dispatcharr, use its HDHR base, normally `https://your-dispatcharr/hdhr`, or its exported channel/output profile base.
 4. The Silo server must reach both `discover.json` and the advertised lineup and media URLs. A reverse proxy or the source's network access rules must admit the server.
 5. Choose **No guide**, **SiliconDust guide**, or **XMLTV URL** independently for each endpoint. An emulator normally uses XMLTV. You may instead put a guide URL in a server-side file and set **XMLTV URL file**; never configure both.
@@ -32,12 +34,19 @@ Keep endpoint IDs stable when changing an address or display name; the editor pr
 
 Guide IDs override automatic matching. Otherwise an exact guide ID/number or an unambiguous display name is used. Ambiguous names stay unmatched. Hidden channels can be restored from their saved mapping even when absent from the visible lineup.
 
+## Shared server capacity
+
+Several Dispatcharr HDHR profiles can share the same upstream tuners. Give their endpoints the same **Capacity group** and set a **Shared tuner limit**. The limit applies across the group as well as each endpoint's own limit. Independent devices remain separate unless explicitly grouped. These counters cover this installation; they cannot see other applications.
+
+XMLTV is streamed and filtered to lineup channels and explicit mappings, with a 256 MiB decoded input cap and one million retained programmes. Large unrelated feeds do not fill the guide cache.
+
 ## Playback limits
 
 - This is an HTTP HDHomeRun client. Add addresses explicitly; UDP/SSDP/mDNS subnet discovery and legacy UDP-only devices are outside this release.
 - DRM/protected channels are listed but cannot play. This plugin does not bypass protection.
-- No DVR, recording scheduler, or timeshift cache is included.
-- The plugin relays source codecs. It does **not** transcode MPEG-2, AC-3, HEVC, or AC-4 for browsers. Use source-side conversion or a compatible TV client when the browser cannot decode the source.
+- No DVR or recording scheduler is included. **Live Rewind** keeps a temporary, viewer-owned cache (defaults: 30 minutes, 5 GiB, 2 GiB free-space reserve).
+- Compatible source codecs pass through unchanged. A codec failure triggers one GPU compatibility attempt; **Compatible playback** can also be selected manually. Conversion requires host FFmpeg and `/dev/dri/renderD128`, produces H.264/AAC HLS up to 1080p/30 fps, and shares two GPU encoding slots with Dispatcharr and XC. Decoding and scaling use the CPU; there is no software encoder fallback.
+- Rewind copies supported H.264 MPEG-TS into keyframe-aligned segments. Unsupported rewind inputs can use GPU conversion with a bounded history. Each ingest consumes its own tuner reservation. Leaving playback releases it; abandoned shared playback leases expire after 75 seconds.
 - Failover happens before bytes are sent. An interrupted stream needs restarting; there is no seamless midstream source switching.
 - Silo and its plugin process must share a network namespace and local listener. This release does not coordinate tuner reservations across multiple Silo nodes or separate installations.
 - A device or emulator can advertise its configured hostname and its resolved IP aliases. Other media hosts require an explicit additional-host entry. Cross-host redirects are checked. Link-local, multicast, and unspecified targets are refused.

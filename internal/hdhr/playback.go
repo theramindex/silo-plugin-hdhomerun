@@ -122,7 +122,7 @@ func (e *Engine) selectSourceLocked(ch *Channel, l *lease, excluded map[string]b
 					used++
 				}
 			}
-			if used < tunerLimit(ep, d) {
+			if used < tunerLimit(ep, d) && e.sharedCapacityAvailableLocked(ep, l) {
 				return src, true
 			}
 		}
@@ -563,3 +563,37 @@ type cancelBody struct {
 }
 
 func (b *cancelBody) Close() error { b.cancel(); return b.ReadCloser.Close() }
+
+// Several exported lineups may belong to the same physical tuner or emulator.
+// Their endpoint limits remain independent, while the shared server limit counts
+// every reservation in the explicitly named group.
+func (e *Engine) sharedCapacityAvailableLocked(endpoint Endpoint, current *lease) bool {
+	used, limit := e.sharedCapacityUsageLocked(endpoint, current)
+	return used < limit
+}
+func (e *Engine) sharedCapacityUsageLocked(endpoint Endpoint, current *lease) (int, int) {
+	if endpoint.CapacityGroup == "" {
+		return 0, 64
+	}
+	members := map[string]bool{}
+	limit := 64
+	for _, other := range e.config.Endpoints {
+		if other.IsEnabled() && other.CapacityGroup == endpoint.CapacityGroup {
+			members[other.ID] = true
+			capacity := other.SharedTunerLimit
+			if capacity == 0 {
+				capacity = tunerLimit(other, e.devices[other.ID])
+			}
+			if capacity < limit {
+				limit = capacity
+			}
+		}
+	}
+	used := 0
+	for _, reservation := range e.leases {
+		if reservation != current && members[reservation.EndpointID] {
+			used++
+		}
+	}
+	return used, limit
+}

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -111,7 +112,7 @@ func main() {
 		}
 		query, _ := structpb.NewStruct(q)
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		result, err := server.Handle(r.Context(), &pluginv1.HandleHTTPRequest{Path: p, Method: r.Method, Query: query, Body: body, Headers: map[string]string{"X-Silo-User-Id": "dev", "X-Silo-Profile-Id": "dev-profile", "X-Silo-User-Role": "admin"}})
+		result, err := server.Handle(r.Context(), &pluginv1.HandleHTTPRequest{Path: p, Method: r.Method, Query: query, Body: body, Headers: map[string]string{"X-Silo-User-Id": "1", "X-Silo-Profile-Id": "dev-profile", "X-Silo-User-Role": "admin"}})
 		if err != nil {
 			w.WriteHeader(500)
 			return
@@ -200,22 +201,11 @@ func emulator(index int, media string, count int) *httptest.Server {
 			}
 			path := filepath.Join(media, "sample.ts")
 			w.Header().Set("Content-Type", "video/mp2t")
-			for {
-				file, err := os.Open(path)
-				if err != nil {
-					return
-				}
-				_, err = io.Copy(flushWriter{w}, file)
-				file.Close()
-				if err != nil {
-					return
-				}
-				select {
-				case <-r.Context().Done():
-					return
-				case <-time.After(time.Second):
-				}
-			}
+			command := exec.CommandContext(r.Context(), "ffmpeg", "-nostdin", "-loglevel", "error", "-re", "-stream_loop", "-1", "-i", path, "-c", "copy", "-f", "mpegts", "pipe:1")
+			command.Stdout = flushWriter{w}
+			command.Stderr = io.Discard
+			_ = command.Run()
+
 		default:
 			if media != "" && strings.HasPrefix(r.URL.Path, "/media/") {
 				http.StripPrefix("/media/", http.FileServer(http.Dir(media))).ServeHTTP(w, r)

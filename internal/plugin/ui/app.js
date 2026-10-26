@@ -11,6 +11,7 @@
     programs: [],
     config: { endpoints: [] },
     favorites: {},
+ recent:[], media:null, tiles:new Map(),
     source: "",
     search: "",
     onlyFavorites: false,
@@ -216,6 +217,7 @@
       .join("");
   }
   function renderChannels() {
+ renderRecent();
     const list = visible();
     const page = pageChannels();
     const guide = selectedGuide();
@@ -329,40 +331,33 @@
     state.selected = c;
     if (!p) p = nowProgramme(c);
     document.body.classList.add("detail-open");
-    const active = state.session && $("video");
+    const active = state.media && $("video");
     if (!active)
       $("detail").innerHTML =
-        '<div class="detail-header"><span>Live TV</span><div class="actions"><button id="stop" hidden>Stop</button><button class="icon-button" id="detail-close" aria-label="Close channel details">' +
+        '<div class="detail-header"><span>Live TV</span><div class="actions"><button id="stop" hidden>Stop</button><button id="player-options-open" type="button">Options</button><button class="icon-button" id="detail-close" aria-label="Close channel details">' +
         icon("close") +
         '</button></div></div><video id="video" controls playsinline hidden></video><div id="play-status" role="status" hidden></div><div class="detail-body" id="detail-body"></div>';
     $("detail-body").innerHTML =
       `<h2>${esc(c.name)}</h2><span class="detail-channel">${esc(c.number)} · ${esc(c.sources.map((s) => s.name).join(" · "))}</span><div class="detail-programme">${p ? `<strong>${esc(p.title)}</strong><time>${clock(p.startUnix)}–${clock(p.endUnix)}</time><p>${esc(p.summary || "")}</p>` : "<strong>Programme information unavailable</strong><p>You can still watch this channel live.</p>"}</div><div class="actions"><button class="primary" id="watch" ${c.protected ? "disabled" : ""}>${icon("play")}${c.protected ? "Protected channel" : "Watch live"}</button></div>`;
+    $("detail-body").insertAdjacentHTML("beforeend",`<div class="player-tools"><button type="button" data-player-mode="compatible" ${c.protected?"disabled":""}>Compatible playback</button><button type="button" data-player-mode="rewind" ${c.protected?"disabled":""}>Live Rewind</button><button type="button" id="add-multiview" ${c.protected?"disabled":""}>Add to multiview</button><details><summary>Player options</summary><div class="player-options"><button type="button" data-video-action="previous">Previous channel</button><button type="button" data-video-action="next">Next channel</button><button type="button" data-video-action="rewind">Back 30 seconds</button><button type="button" data-video-action="forward">Forward 30 seconds</button><button type="button" data-video-action="live">Go live</button><button type="button" data-video-action="aspect">Fit / fill screen</button><button type="button" data-video-action="pip">Picture in Picture</button><button type="button" data-video-action="fullscreen">Fullscreen</button><label>Audio track<select id="audio-track"><option value="0">Default audio</option></select></label></div></details></div>`);
+    $("detail-body").querySelectorAll("[data-player-mode]").forEach(b=>b.onclick=()=>play(c,b.dataset.playerMode));
+    $("detail-body").querySelectorAll("[data-video-action]").forEach(b=>b.onclick=()=>videoAction(b.dataset.videoAction));
+    $("add-multiview").onclick=()=>addTile(c);
+    $("player-options-open").onclick=()=>{const tools=$("detail-body").querySelector(".player-tools");tools.querySelector("details").open=true;tools.scrollIntoView({block:"nearest"});};
+    $("audio-track").onchange=event=>{const n=Number(event.target.value);if(state.media?.hls)state.media.hls.audioTrack=n;else if($("video").audioTracks)Array.from($("video").audioTracks).forEach((track,i)=>track.enabled=i===n);};
     $("watch").onclick = () => play(c);
     $("stop").onclick = () => stopPlayer();
     $("detail-close").onclick = closeDetail;
     renderChannels();
   }
-  async function loadScript(name) {
-    if (document.querySelector(`script[data-library="${name}"]`)) return;
-    const r = await fetchAuth(base + "/assets/" + name);
-    if (!r.ok) throw new Error("Unable to load the video player.");
-    const blob = new Blob([await r.text()], { type: "text/javascript" });
-    const u = URL.createObjectURL(blob);
-    try {
-      await new Promise((resolve, reject) => {
-        const script = document.createElement("script");
-        script.dataset.library = name;
-        script.src = u;
-        script.onload = resolve;
-        script.onerror = () => {
-          script.remove();
-          reject(new Error("Unable to load the video player."));
-        };
-        document.head.append(script);
-      });
-    } finally {
-      URL.revokeObjectURL(u);
-    }
+  const libraryPromises={};
+  function loadScript(name) {
+    if(libraryPromises[name])return libraryPromises[name];
+    libraryPromises[name]=(async()=>{
+      const r=await fetchAuth(base+"/assets/"+name);if(!r.ok)throw new Error("Unable to load the video player.");
+      const blob=new Blob([await r.text()],{type:"text/javascript"});const url=URL.createObjectURL(blob);
+      try{await new Promise((resolve,reject)=>{const script=document.createElement("script");script.src=url;script.onload=resolve;script.onerror=()=>{script.remove();reject(new Error("Unable to load the video player."))};document.head.append(script);});}finally{URL.revokeObjectURL(url)}
+    })().catch(error=>{delete libraryPromises[name];throw error});return libraryPromises[name];
   }
   function playerStatus(message) {
     if ($("play-status")) {
@@ -371,147 +366,64 @@
     }
   }
   async function stopPlayer() {
-    state.generation++;
-    const session = state.session;
-    state.session = "";
-    clearInterval(state.heartbeat);
-    state.heartbeat = null;
-    if (state.hls) {
-      state.hls.destroy();
-      state.hls = null;
-    }
-    if (state.player) {
-      state.player.destroy();
-      state.player = null;
-    }
-    const v = $("video");
-    if (v) {
-      v.pause();
-      v.removeAttribute("src");
-      v.load();
-      v.hidden = true;
-    }
-    if ($("stop")) $("stop").hidden = true;
+    state.generation++;state.session="";
+    const media=state.media;state.media=null;
+    if(media)await media.stop();
+    if($("video"))$("video").hidden=true;
+    if($("stop"))$("stop").hidden=true;
     playerStatus("");
-    if (session)
-      try {
-        await api(
-          "/api/session/stop?session_id=" + encodeURIComponent(session),
-          "POST",
-        );
-      } catch (e) {
-        notice(
-          "Playback stopped locally. The server reservation will expire automatically.",
-        );
-      }
   }
-  async function play(c) {
-    const stopping = stopPlayer();
-    const generation = state.generation;
-    await stopping;
-    if (generation !== state.generation) return;
-    selectChannel(c);
-    const session = crypto.randomUUID();
-    let allocated = false;
+  function mediaOptions(video,status,error) {
+    return {base,root,video,headers,fetch:fetchAuth,
+      loadLibraries:()=>Promise.all([loadScript("hls.min.js"),loadScript("mpegts.min.js")]),
+      onStatus:status,onError:error};
+  }
+  function refreshAudio() {
+    const select=$("audio-track"),video=$("video");if(!select||!video)return;
+    const tracks=state.media?.hls?.audioTracks || Array.from(video.audioTracks||[]);
+    select.innerHTML=tracks.length?tracks.map((track,i)=>`<option value="${i}">${esc(track.name||track.label||track.lang||"Audio "+(i+1))}</option>`).join(""):'<option value="0">Default audio</option>';
+  }
+  async function play(c,mode="direct") {
+    await stopTiles();
+    const stopping=stopPlayer();const generation=state.generation;await stopping;if(generation!==state.generation)return;selectChannel(c);
+    const video=$("video");video.hidden=false;$("stop").hidden=false;state.session="shared";
+    const options=mediaOptions(video,playerStatus,playerStatus);
+    const media=new SiloLiveMedia({...options,onAttached:()=>{if(generation!==state.generation)return;refreshAudio();remember(c.id);}});
+    state.media=media;
+    video.addEventListener("loadedmetadata",refreshAudio,{once:true});
+    await media.play(c.id,mode);
+  }
+  async function videoAction(action) {
+    const video=$("video");if(!video)return;
+    const seek=()=>video.seekable?.length?[video.seekable.start(0),video.seekable.end(video.seekable.length-1)]:null;
     try {
-      if (!state.relay)
-        throw new Error(
-          "Browser playback needs the stream relay update in the Ramindex Silo server. Channels remain available to compatible TV clients.",
-        );
-      playerStatus("Finding an available tuner…");
-      const result = await api("/api/play", "POST", {
-        channelId: c.id,
-        sessionId: session,
-        format: "any",
-      });
-      allocated = true;
-      if (generation !== state.generation) {
-        await api("/api/session/stop?session_id=" + session, "POST");
-        return;
-      }
-      state.session = session;
-      const v = $("video");
-      v.onplaying = () => playerStatus("");
-      v.onerror = () =>
-        playerStatus(
-          "The browser could not decode this stream. Try a compatible TV client.",
-        );
-      v.onended = () => stopPlayer();
-      v.hidden = false;
-      $("stop").hidden = false;
-      const media = root + result.path;
-      if (result.container === "hls") {
-        await loadScript("hls.min.js");
-        if (generation !== state.generation) return;
-        if (window.Hls?.isSupported()) {
-          const hls = new Hls({
-            xhrSetup: (xhr, url) => {
-              if (new URL(url, location.href).origin !== location.origin)
-                throw new Error("Unapproved media origin");
-              Object.entries(headers()).forEach(([k, v]) =>
-                xhr.setRequestHeader(k, v),
-              );
-              xhr.withCredentials = true;
-            },
-          });
-          state.hls = hls;
-          hls.loadSource(media);
-          hls.attachMedia(v);
-          hls.on(Hls.Events.MANIFEST_PARSED, () =>
-            v.play().catch(() => playerStatus("Press Play to start.")),
-          );
-          hls.on(Hls.Events.ERROR, (_, d) => {
-            if (d.fatal)
-              playerStatus(
-                "This stream could not play. Stop and try again, or use a compatible TV client.",
-              );
-          });
-        } else if (v.canPlayType("application/vnd.apple.mpegurl")) {
-          v.src = media;
-          await v.play();
-        } else throw new Error("This browser does not support HLS playback.");
-      } else {
-        await loadScript("mpegts.min.js");
-        if (generation !== state.generation) return;
-        if (!window.mpegts?.isSupported())
-          throw new Error(
-            "This browser cannot play MPEG-TS directly. Use an HLS emulator or a compatible TV client.",
-          );
-        const player = mpegts.createPlayer(
-          { type: "mpegts", isLive: true, url: media },
-          {
-            enableWorker: false,
-            enableStashBuffer: false,
-            lazyLoad: false,
-            headers: headers(),
-          },
-        );
-        state.player = player;
-        player.attachMediaElement(v);
-        player.load();
-        player.on(mpegts.Events.ERROR, () =>
-          playerStatus(
-            "The stream could not play. OTA MPEG-2 / AC-3 may need conversion at the source or a compatible TV client.",
-          ),
-        );
-        await player.play();
-      }
-      if (generation !== state.generation) return;
-      if (!v.paused && v.readyState >= 2) playerStatus("");
-      state.heartbeat = setInterval(async () => {
-        try {
-          await api("/api/session/heartbeat?session_id=" + session, "POST");
-        } catch (e) {
-          playerStatus("The tuner session expired. Stop and try again.");
-        }
-      }, 25000);
-    } catch (e) {
-      if (generation === state.generation) {
-        if (allocated) await stopPlayer();
-        playerStatus(e.message);
-      }
-    }
+      if(action==="previous"||action==="next") {const list=visible().filter(c=>!c.protected),index=list.findIndex(c=>c.id===state.selected?.id);const next=list[(index+(action==="next"?1:list.length-1))%list.length];if(next)play(next);}
+      if(action==="rewind"||action==="forward"){const range=seek();if(range)video.currentTime=Math.max(range[0],Math.min(range[1]-.25,video.currentTime+(action==="rewind"?-30:30)));}
+      if(action==="live"){const range=seek();if(range)video.currentTime=Math.max(range[0],range[1]-3);await video.play();}
+      if(action==="aspect")video.style.objectFit=video.style.objectFit==="cover"?"contain":"cover";
+      if(action==="pip") {if(document.pictureInPictureElement)await document.exitPictureInPicture();else if(video.requestPictureInPicture)await video.requestPictureInPicture();else playerStatus("Picture in Picture is unavailable in this browser.");}
+      if(action==="fullscreen"){if(document.fullscreenElement)await document.exitFullscreen();else await video.requestFullscreen();}
+    }catch(error){playerStatus(error.message)}
   }
+  async function addTile(channel) {
+    const viewer=profile();
+    await stopPlayer();
+    if(state.tiles.size>=4){notice("Multiview supports up to four channels.");return}
+    if(state.tiles.has(channel.id)){notice("This channel is already in multiview.");return}
+    const tile=document.createElement("article");tile.className="multiview-tile";
+    tile.innerHTML=`<header><strong>${esc(channel.name)}</strong><button type="button" data-audio aria-label="Listen to ${esc(channel.name)}">Audio</button><button type="button" data-remove aria-label="Remove ${esc(channel.name)}">${icon("close")}</button></header><video controls playsinline muted></video><p role="status"></p>`;
+    $("multiview-grid").append(tile);$("multiview").hidden=false;
+    const video=tile.querySelector("video");video.muted=true;
+    const label=tile.querySelector("p");
+    const media=new SiloLiveMedia(mediaOptions(video,message=>label.textContent=message,message=>label.textContent=message));
+    state.tiles.set(channel.id,{tile,media,video});
+    tile.querySelector("[data-remove]").onclick=()=>removeTile(channel.id);
+    tile.querySelector("[data-audio]").onclick=()=>{for(const item of state.tiles.values())item.video.muted=item.video!==video;};
+    await media.play(channel.id);if(viewer===profile()&&state.tiles.has(channel.id))remember(channel.id);
+  }
+  async function removeTile(id){const item=state.tiles.get(id);if(!item)return;state.tiles.delete(id);item.tile.remove();$("multiview").hidden=state.tiles.size===0;await item.media.stop();}
+  function stopTiles(){return Promise.all(Array.from(state.tiles.keys(),removeTile));}
+  $("multiview-close").onclick=stopTiles;
   async function preferences() {
     if (!installation) return;
     const payload = await api(
@@ -526,52 +438,27 @@
         : payload.values?.preferences || {};
     const view = raw.profiles?.[profile()] || raw;
     state.favorites = view.favorites || {};
+ state.recent=Array.isArray(view.recentChannels)?view.recentChannels:[];
   }
-  function favorite(id) {
-    const value = !state.favorites[id];
-    const viewer = profile();
-    state.write = state.write
-      .catch(() => {})
-      .then(async () => {
-        try {
-          const path = "/settings/plugins/" + installation;
-          const payload = await api(path, "GET", undefined, true);
-          if (viewer !== profile())
-            throw new Error(
-              "Profile changed. Reload before editing favorites.",
-            );
-          const values = payload.values || {};
-          const raw =
-            typeof values.preferences === "string"
-              ? JSON.parse(values.preferences || "{}")
-              : values.preferences || {};
-          let target = raw;
-          if (viewer) {
-            raw.profiles ||= {};
-            if (!raw.profiles[viewer])
-              raw.profiles[viewer] = {
-                favorites: { ...(raw.favorites || {}) },
-                favoriteOrder: [...(raw.favoriteOrder || [])],
-                hiddenCategories: { ...(raw.hiddenCategories || {}) },
-              };
-            target = raw.profiles[viewer];
-          }
-          target.favorites = { ...(target.favorites || {}) };
-          if (value) target.favorites[id] = true;
-          else delete target.favorites[id];
-          target.favoriteOrder = (target.favoriteOrder || []).filter(
-            (x) => x !== id,
-          );
-          if (value) target.favoriteOrder.push(id);
-          values.preferences = JSON.stringify(raw);
-          await api(path, "PUT", { values }, true);
-          state.favorites = target.favorites;
-          renderChannels();
-        } catch (e) {
-          notice("Could not save favorites: " + e.message);
-        }
-      });
+  function updatePreferences(change) {
+    const viewer=profile();
+    state.write=state.write.catch(()=>{}).then(async()=>{
+      const path="/settings/plugins/"+installation;
+      const payload=await api(path,"GET",undefined,true);
+      if(viewer!==profile())throw new Error("Profile changed. Reload before saving.");
+      const values=payload.values||{};
+      const raw=typeof values.preferences==="string"?JSON.parse(values.preferences||"{}"):values.preferences||{};
+      let target=raw;
+      if(viewer){raw.profiles||={};raw.profiles[viewer]||={favorites:{...(raw.favorites||{})},favoriteOrder:[...(raw.favoriteOrder||[])],recentChannels:[...(raw.recentChannels||[])]};target=raw.profiles[viewer];}
+      change(target);values.preferences=JSON.stringify(raw);
+      await api(path,"PUT",{values},true);
+      if(viewer!==profile())return;
+      state.favorites=target.favorites||{};state.recent=target.recentChannels||[];renderChannels();
+    }).catch(error=>notice("Could not save preferences: "+error.message));
   }
+  function favorite(id){const value=!state.favorites[id];updatePreferences(target=>{target.favorites={...(target.favorites||{})};if(value)target.favorites[id]=true;else delete target.favorites[id];target.favoriteOrder=(target.favoriteOrder||[]).filter(x=>x!==id);if(value)target.favoriteOrder.push(id);});}
+  function remember(id){updatePreferences(target=>{target.recentChannels=[id,...(target.recentChannels||[]).filter(x=>x!==id)].slice(0,20);});}
+  function renderRecent(){const root=$("recent-channels");root.hidden=!state.onlyFavorites||state.recent.length===0;root.innerHTML='<h2>Recently watched</h2><div class="recent-list">'+state.recent.map(id=>state.channels.find(c=>c.id===id)).filter(Boolean).map(c=>`<button type="button" data-recent="${esc(c.id)}">${logo(c)}<span>${esc(c.name)}</span></button>`).join("")+"</div>";root.querySelectorAll("[data-recent]").forEach(button=>button.onclick=()=>{const channel=state.channels.find(c=>c.id===button.dataset.recent);if(channel)play(channel);});}
   async function loadGuide() {
     const start = Math.floor(Date.now() / 1000 / 10800) * 10800 + state.offset;
     const ids = pageChannels().map((c) => c.id);
@@ -640,7 +527,7 @@
       ? state.config.endpoints
           .map((e, i) => {
             const health = state.endpoints.find((s) => s.id === e.id);
-            return `<article class="device"><div><h3>${esc(e.name || e.id)}</h3><p>${esc(e.url)}</p><p>${esc(health?.model || "HDHomeRun-compatible endpoint")}</p></div><div class="device-health"><p class="${health?.error ? "error" : "health"}">${e.enabled === false ? "Disabled" : health?.error ? esc(health.error) : health?.lastSuccessUnix ? "Connected" : "Waiting for discovery"}</p><p>${health?.channelCount || 0} channels · ${health?.inUse || 0} / ${health?.tunerCount || "—"} tuners reserved</p>${health?.guideError ? `<p class="error">Guide: ${esc(health.guideError)}</p>` : e.guide_mode && e.guide_mode !== "none" ? `<p>${health?.programCount || 0} programmes</p>` : "<p>No guide configured</p>"}</div><div class="actions"><button data-edit="${i}">Edit</button><button data-remove="${i}">Remove</button></div></article>`;
+            return `<article class="device"><div><h3>${esc(e.name || e.id)}</h3><p>${esc(e.url)}</p><p>${esc(health?.model || "HDHomeRun-compatible endpoint")}</p></div><div class="device-health"><p class="${health?.error ? "error" : "health"}">${e.enabled === false ? "Disabled" : health?.error ? esc(health.error) : health?.lastSuccessUnix ? "Connected" : "Waiting for discovery"}</p><p>${health?.channelCount || 0} channels · ${health?.inUse || 0} / ${health?.tunerCount || "—"} tuners reserved</p>${health?.capacityGroup?`<p>Server ${esc(health.capacityGroup)}: ${health.sharedInUse||0} / ${health.sharedTunerLimit} shared tuners</p>`:""}${health?.guideError ? `<p class="error">Guide: ${esc(health.guideError)}</p>` : e.guide_mode && e.guide_mode !== "none" ? `<p>${health?.programCount || 0} programmes</p>` : "<p>No guide configured</p>"}</div><div class="actions"><button data-edit="${i}">Edit</button><button data-remove="${i}">Remove</button></div></article>`;
           })
           .join("")
       : '<p class="device-empty">No endpoints connected. Add the HTTP address of your tuner or emulator to discover its lineup. Each endpoint keeps its own channels and tuner capacity.</p>';
@@ -663,13 +550,15 @@
       "name",
       "url",
       "tuner_limit",
+ "capacity_group",
+ "shared_tuner_limit",
       "priority",
       "guide_mode",
       "guide_url",
       "guide_url_file",
     ])
       form.elements[name].value =
-        e[name] ?? (name === "tuner_limit" || name === "priority" ? 0 : "");
+        e[name] ?? (name === "tuner_limit" || name === "priority" || name === "shared_tuner_limit" ? 0 : "");
     form.elements.enabled.checked = e.enabled !== false;
     form.elements.allowed_hosts.value = (e.allowed_hosts || []).join(", ");
     $("edit-title").textContent =
@@ -720,6 +609,8 @@
         url: form.elements.url.value.trim(),
         enabled: form.elements.enabled.checked,
         tuner_limit: Number(form.elements.tuner_limit.value),
+ capacity_group:form.elements.capacity_group.value.trim(),
+ shared_tuner_limit:Number(form.elements.shared_tuner_limit.value),
         priority: Number(form.elements.priority.value),
         guide_mode: form.elements.guide_mode.value,
         guide_url: form.elements.guide_url.value.trim(),
@@ -871,9 +762,10 @@
     renderChannels();
     loadGuide().catch((e) => notice(e.message));
   };
-  window.addEventListener("pagehide", () => stopPlayer());
+  window.addEventListener("pagehide", () => {stopPlayer();stopTiles();});
   window.addEventListener("storage", (event) => {
     if (event.key === "profile_id") {
+ stopTiles();
       stopPlayer()
         .then(() => preferences())
         .then(() => renderChannels())

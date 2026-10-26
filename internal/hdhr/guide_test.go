@@ -117,3 +117,43 @@ func TestGuideFillerDoesNotPopulateClassifiedRows(t *testing.T) {
 		t.Fatal("filler polluted classified or live rows")
 	}
 }
+
+func TestLargeGuideRetainsOnlyMappedLineup(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Hour)
+	var xml strings.Builder
+	xml.WriteString(`<tv><channel id="wanted"><display-name>News</display-name></channel><channel id="other"><display-name>Other</display-name></channel>`)
+	start, end := now.Format("20060102150405 -0700"), now.Add(time.Hour).Format("20060102150405 -0700")
+	for i := 0; i < 100005; i++ {
+		xml.WriteString(`<programme channel="other" start="` + start + `" stop="` + end + `"><title>Unused</title></programme>`)
+	}
+	xml.WriteString(`<programme channel="wanted" start="` + start + `" stop="` + end + `"><title>News now</title></programme></tv>`)
+	guide, err := parseGuide(strings.NewReader(xml.String()), now, []LineupChannel{{Number: "7", Name: "Local news"}}, map[string]ChannelMapping{"7": {GuideID: "wanted"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(guide.Programs) != 1 || guide.Programs[0].Title != "News now" {
+		t.Fatalf("retained irrelevant programmes: %d", len(guide.Programs))
+	}
+	// Full lineups may legitimately exceed the old 100k limit, still bounded by
+	// decoded bytes and the one-million retained-programme budget.
+	all, err := ParseGuide(strings.NewReader(xml.String()), now)
+	if err != nil || len(all.Programs) != 100006 {
+		t.Fatalf("large complete feed: programmes=%d err=%v", len(all.Programs), err)
+	}
+}
+
+func TestGuideFilteringSupportsInterleavedChannelsAndAmbiguousNames(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Hour)
+	start, end := now.Format("20060102150405 -0700"), now.Add(time.Hour).Format("20060102150405 -0700")
+	program := func(id string) string {
+		return `<programme channel="` + id + `" start="` + start + `" stop="` + end + `"><title>` + id + `</title></programme>`
+	}
+	xml := `<tv><channel id="a"><display-name>News</display-name></channel>` + program("a") + `<channel id="b"><display-name>Culture</display-name></channel>` + program("b") + `<channel id="c"><display-name>News</display-name></channel>` + program("c") + `</tv>`
+	guide, err := parseGuide(strings.NewReader(xml), now, []LineupChannel{{Number: "7", Name: "News"}, {Number: "8", Name: "Culture"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(guide.Programs) != 1 || guide.Programs[0].ChannelID != "b" {
+		t.Fatalf("interleaved or ambiguous match: %+v", guide.Programs)
+	}
+}
