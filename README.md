@@ -38,7 +38,7 @@ Guide IDs override automatic matching. Otherwise an exact guide ID/number or an 
 
 Several Dispatcharr HDHR profiles can share the same upstream tuners. Give their endpoints the same **Capacity group** and set a **Shared tuner limit**. The limit applies across the group as well as each endpoint's own limit. Independent devices remain separate unless explicitly grouped. These counters cover this installation; they cannot see other applications.
 
-XMLTV is streamed and filtered to lineup channels and explicit mappings, with a 256 MiB decoded input cap and one million retained programmes. Large unrelated feeds do not fill the guide cache. Retained guides use a private compressed disk cache, read with a 512 MiB decoded bound; existing JSON caches remain readable.
+XMLTV is streamed and filtered to lineup channels and explicit mappings, with a 256 MiB decoded input cap and one million retained programmes. Large unrelated feeds do not fill the guide cache. Retained guides use a private `guide.sqlite` database in the catalog directory. It uses WAL mode and must be on a local filesystem. Guide requests query channel/time windows without keeping the full schedule in memory. Raw listings are scoped to their endpoint; only explicit station mappings combine them, with the configured priority deciding which listing wins. Refreshes commit guide rows and device metadata together; failed or empty guide responses keep the last good listings. Lineup/health-only refreshes do not rewrite programme rows. Existing compressed and plain JSON caches are imported once and retained for rollback (legacy decoding remains bounded to 512 MiB).
 
 ## Playback limits
 

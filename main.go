@@ -54,6 +54,10 @@ func main() {
 	if err := publicmanifest.ValidateCatalogPresentation(manifest, "https://github.com/theramindex/silo-plugin-hdhomerun"); err != nil {
 		panic(err)
 	}
+	if len(os.Args) > 1 && os.Args[1] == "manifest" {
+		sdkruntime.Serve(sdkruntime.ServeConfig{Servers: sdkruntime.CapabilityServers{Runtime: &runtimeServer{manifest: manifest}}})
+		return
+	}
 	dir := os.Getenv("HDHOMERUN_DATA_DIR")
 	if dir == "" {
 		dir = "/var/lib/continuum/plugins/silo.ramindex.hdhomerun"

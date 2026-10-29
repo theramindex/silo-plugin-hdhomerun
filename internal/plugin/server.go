@@ -196,7 +196,7 @@ func (s *Server) Handle(ctx context.Context, r *pluginv1.HandleHTTPRequest) (*pl
 	case m == "GET" && p == "/silo-compat/livetv/v1/channels":
 		return response(200, s.Engine.Snapshot().Channels), nil
 	case m == "GET" && (p == "/silo-compat/livetv/v1/programs" || p == "/hdhomerun/api/guide"):
-		return s.programs(r), nil
+		return s.programs(ctx, r), nil
 	case (m == "GET" && p == "/silo-compat/livetv/v1/stream") || (m == "POST" && p == "/hdhomerun/api/play"):
 		channel, session, format := query(r, "channel_id"), query(r, "session_id"), query(r, "format")
 		browser := p == "/hdhomerun/api/play"
@@ -240,7 +240,7 @@ func (s *Server) Handle(ctx context.Context, r *pluginv1.HandleHTTPRequest) (*pl
 	}
 	return response(404, map[string]string{"error": "Not found"}), nil
 }
-func (s *Server) programs(r *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResponse {
+func (s *Server) programs(ctx context.Context, r *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPResponse {
 	start, e1 := strconv.ParseInt(query(r, "start"), 10, 64)
 	end, e2 := strconv.ParseInt(query(r, "end"), 10, 64)
 	class := query(r, "class")
@@ -281,8 +281,12 @@ func (s *Server) programs(r *pluginv1.HandleHTTPRequest) *pluginv1.HandleHTTPRes
 	if limit > 100000 {
 		limit = 100000
 	}
+	programs, err := s.Engine.Programs(ctx, ids, start, end)
+	if err != nil {
+		return response(503, map[string]string{"code": "guide_unavailable"})
+	}
 	out := []hdhr.Program{}
-	for _, p := range snap.Programs {
+	for _, p := range programs {
 		if _, ok := rank[p.ChannelID]; !ok || p.StartUnix >= end || p.EndUnix <= start {
 			continue
 		}

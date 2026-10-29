@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/theramindex/silo-plugins/pkg/epg"
 )
 
 var (
@@ -72,13 +74,14 @@ type EndpointStatus struct {
 }
 type Snapshot struct {
 	Channels      []Channel        `json:"channels"`
-	Programs      []Program        `json:"programs"`
 	Endpoints     []EndpointStatus `json:"endpoints"`
 	Refreshing    bool             `json:"refreshing"`
 	UpdatedAtUnix int64            `json:"updatedAtUnix"`
 	GatewayReady  bool             `json:"gatewayReady"`
 }
 type deviceState struct {
+	ProgramCount    int `json:"programCount,omitempty"`
+	guideChanged    bool
 	Discovery       Discovery       `json:"discovery"`
 	Lineup          []LineupChannel `json:"lineup"`
 	Guide           Guide           `json:"guide"`
@@ -117,7 +120,8 @@ type Engine struct {
 	signature    string
 	devices      map[string]deviceState
 	channels     []Channel
-	programs     []Program
+	guideStore   *epg.Store[guideRecord]
+	guideView    *epg.View[guideRecord]
 	updatedAt    int64
 	refreshing   bool
 	closed       bool
@@ -131,12 +135,22 @@ type Engine struct {
 }
 
 func NewEngine(dir string) (*Engine, error) {
+	path := ":memory:"
+	if dir != "" {
+		path = filepath.Join(dir, "guide.sqlite")
+	}
+	guideStore, err := epg.Open(path, guideRecordFields)
+	if err != nil {
+		return nil, fmt.Errorf("open local guide cache: %w", err)
+	}
+
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
+		_ = guideStore.Close()
 		return nil, errors.New("unable to start local stream relay")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{config: Config{Endpoints: []Endpoint{}}, devices: map[string]deviceState{}, leases: map[string]*lease{}, cooldown: map[string]time.Time{}, dir: dir, address: listener.Addr().String(), ctx: ctx, cancel: cancel}
+	e := &Engine{config: Config{Endpoints: []Endpoint{}}, devices: map[string]deviceState{}, leases: map[string]*lease{}, cooldown: map[string]time.Time{}, dir: dir, address: listener.Addr().String(), ctx: ctx, cancel: cancel, guideStore: guideStore}
 	e.server = &http.Server{Handler: http.HandlerFunc(e.serveGateway), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10}
 	e.wg.Add(2)
 	go func() { defer e.wg.Done(); _ = e.server.Serve(listener) }()
@@ -158,6 +172,7 @@ func (e *Engine) Close() {
 	}
 	e.mu.Unlock()
 	e.wg.Wait()
+	_ = e.guideStore.Close()
 }
 func (e *Engine) background() {
 	defer e.wg.Done()
@@ -206,21 +221,41 @@ func (e *Engine) Configure(cfg Config) error {
 	e.devices = map[string]deviceState{}
 	e.updatedAt = 0
 	e.channels = nil
-	e.programs = nil
-	// Cache contains private source URLs. It is never served through user APIs.
-	if e.dir != "" {
+	e.guideView = nil
+	// Cache contains private source URLs and stays in the plugin's private directory.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	metadata, view, found, loadErr := e.guideStore.Load(ctx)
+	cancel()
+	if loadErr != nil {
+		e.mu.Unlock()
+		return fmt.Errorf("load local guide cache: %w", loadErr)
+	}
+	if found {
+		var saved diskState
+		if err := json.Unmarshal(metadata, &saved); err != nil {
+			e.mu.Unlock()
+			return err
+		}
+		if saved.Signature == signature {
+			e.devices = saved.Devices
+			e.updatedAt = saved.UpdatedAtUnix
+			e.guideView = view
+		}
+	} else if e.dir != "" {
+		// Import legacy gzip/plain JSON once, on the first background refresh.
 		for _, name := range []string{"catalog.json.gz", "catalog.json"} {
 			saved, err := readDiskState(filepath.Join(e.dir, name))
 			if err == nil && saved.Signature == signature {
 				e.devices = saved.Devices
 				e.updatedAt = saved.UpdatedAtUnix
-				if e.devices == nil {
-					e.devices = map[string]deviceState{}
-				}
 				break
 			}
 		}
 	}
+	if e.devices == nil {
+		e.devices = map[string]deviceState{}
+	}
+
 	e.mu.Unlock()
 	// No network access inside Configure: the host has a short RPC deadline.
 	return nil
@@ -249,6 +284,9 @@ func (e *Engine) RefreshAsync() {
 	}()
 }
 func (e *Engine) Refresh(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(e.ctx, cancel)
+	defer func() { stop(); cancel() }()
 	if !e.refreshMu.TryLock() {
 		return nil
 	}
@@ -297,16 +335,24 @@ func (e *Engine) Refresh(ctx context.Context) error {
 						d.LastSuccessUnix = time.Now().Unix()
 						if endpoint.GuideMode != "none" && d.NextGuideUnix <= time.Now().Unix() {
 							guide, delay, guideErr := fetchGuide(ctx, endpoint, discovery, lineup)
-							if guideErr == nil {
+							if guideErr == nil && (len(guide.Programs) > 0 || (d.ProgramCount == 0 && len(d.Guide.Programs) == 0)) {
+								d.guideChanged = true
+								d.ProgramCount = len(guide.Programs)
 								d.Guide = guide
 								d.GuideError = ""
 								d.NextGuideUnix = time.Now().Add(delay).Unix()
 							} else {
-								d.GuideError = guideErr.Error()
+								if guideErr != nil {
+									d.GuideError = guideErr.Error()
+								} else {
+									d.GuideError = "Guide refresh returned no programmes; kept the last known good guide."
+								}
 								d.NextGuideUnix = time.Now().Add(30 * time.Minute).Unix()
 							}
 						}
 						if endpoint.GuideMode == "none" {
+							d.guideChanged = d.ProgramCount > 0 || len(d.Guide.Programs) > 0
+							d.ProgramCount = 0
 							d.Guide = Guide{}
 							d.GuideError = ""
 						}
@@ -324,27 +370,78 @@ func (e *Engine) Refresh(ctx context.Context) error {
 	}
 	wg.Wait()
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.signature != signature || e.closed {
-		for _, d := range states {
-			if d.client != nil {
+		e.mu.Unlock()
+		for id, d := range states {
+			if d.client != nil && d.client != old[id].client {
 				d.client.Close()
 			}
 		}
 		return errors.New("configuration changed during refresh")
 	}
-	for _, d := range e.devices {
-		if d.client != nil {
+	previousView := e.guideView
+	if previousView == nil {
+		// A legacy cache remains readable while its first SQLite import runs.
+		// Publish only the already-durable old guide here, never fetched new data.
+		legacy := map[string]deviceState{}
+		hasGuide := false
+		for id, previous := range old {
+			if len(previous.Guide.Programs) > 0 {
+				hasGuide = true
+			}
+			previous.ProgramCount = len(previous.Guide.Programs)
+			if next, ok := states[id]; ok {
+				previous.client = next.client
+				previous.Error = next.Error
+			}
+			legacy[id] = previous
+		}
+		if hasGuide {
+			e.devices = legacy
+			e.rebuildLocked()
+		}
+	}
+	e.mu.Unlock()
+	updated := time.Now().Unix()
+	view, err := e.persistGuide(ctx, states, updated, previousView, signature)
+	e.mu.Lock()
+	if err != nil || e.signature != signature || e.closed {
+		if err != nil && e.signature == signature {
+			for id, d := range e.devices {
+				d.GuideError = "Local guide cache could not be updated; kept the last known good guide."
+				e.devices[id] = d
+			}
+		}
+		active := make(map[string]*DeviceClient, len(e.devices))
+		for id, d := range e.devices {
+			active[id] = d.client
+		}
+		e.mu.Unlock()
+		for id, d := range states {
+			if d.client != nil && d.client != old[id].client && d.client != active[id] {
+				d.client.Close()
+			}
+		}
+		if err != nil {
+			return err
+		}
+		return errors.New("configuration changed during refresh")
+	}
+	previous := e.devices
+	e.devices = states
+	e.guideView = view
+	e.updatedAt = updated
+	e.rebuildLocked()
+	e.mu.Unlock()
+	for id, d := range previous {
+		if d.client != nil && d.client != states[id].client {
 			d.client.Close()
 		}
 	}
-	e.devices = states
-	e.updatedAt = time.Now().Unix()
-	e.rebuildLocked()
-	e.persistLocked()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -384,45 +481,8 @@ func readDiskState(path string) (diskState, error) {
 	return saved, nil
 }
 
-func (e *Engine) persistLocked() {
-	if e.dir == "" {
-		return
-	}
-	if os.MkdirAll(e.dir, 0700) != nil {
-		return
-	}
-	data, err := json.Marshal(diskState{Signature: e.signature, Devices: e.devices, UpdatedAtUnix: e.updatedAt})
-	if err != nil || len(data) > maxCacheBytes {
-		return
-	}
-	f, err := os.CreateTemp(e.dir, ".catalog-*")
-	if err != nil {
-		return
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	compressed, err := gzip.NewWriterLevel(f, gzip.BestSpeed)
-	if err != nil {
-		_ = f.Close()
-		return
-	}
-	if _, err = compressed.Write(data); err != nil {
-		_ = compressed.Close()
-		_ = f.Close()
-		return
-	}
-	if compressed.Close() != nil {
-		_ = f.Close()
-		return
-	}
-	if f.Close() != nil {
-		return
-	}
-	_ = os.Rename(name, filepath.Join(e.dir, "catalog.json.gz"))
-}
 func (e *Engine) rebuildLocked() {
 	channels := []Channel{}
-	programs := []Program{}
 	byID := map[string]int{}
 	endpoints := append([]Endpoint{}, e.config.Endpoints...)
 	sort.SliceStable(endpoints, func(i, j int) bool { return endpoints[i].Priority < endpoints[j].Priority })
@@ -437,10 +497,6 @@ func (e *Engine) rebuildLocked() {
 		if d.Guide.names == nil {
 			d.Guide.names = guideNames(d.Guide.Channels)
 			e.devices[endpoint.ID] = d
-		}
-		guidePrograms := map[string][]Program{}
-		for _, program := range d.Guide.Programs {
-			guidePrograms[program.ChannelID] = append(guidePrograms[program.ChannelID], program)
 		}
 		seenNumbers := map[string]bool{}
 		for _, raw := range d.Lineup {
@@ -493,39 +549,19 @@ func (e *Engine) rebuildLocked() {
 				if ch.LogoURL == "" {
 					ch.LogoURL = d.Guide.Logos[guideID]
 				}
-				for _, gp := range guidePrograms[guideID] {
-					programs = append(programs, gp.ForChannel(id))
-				}
 			}
 		}
 	}
 	for i := range channels {
 		sort.SliceStable(channels[i].sources, func(a, b int) bool { return channels[i].sources[a].Priority < channels[i].sources[b].Priority })
 	}
-	// Prefer the guide of the highest-priority endpoint for explicitly merged stations.
-	seenPrograms := map[string]bool{}
-	unique := []Program{}
-	for _, p := range programs {
-		key := fmt.Sprintf("%s:%d", p.ChannelID, p.StartUnix)
-		if !seenPrograms[key] {
-			seenPrograms[key] = true
-			unique = append(unique, p)
-		}
-	}
-	sort.SliceStable(unique, func(i, j int) bool {
-		if unique[i].ChannelID != unique[j].ChannelID {
-			return unique[i].ChannelID < unique[j].ChannelID
-		}
-		return unique[i].StartUnix < unique[j].StartUnix
-	})
 	e.channels = channels
-	e.programs = unique
 }
 func (e *Engine) Snapshot() Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.expireLocked()
-	out := Snapshot{Channels: []Channel{}, Programs: append([]Program{}, e.programs...), Endpoints: []EndpointStatus{}, Refreshing: e.refreshing, UpdatedAtUnix: e.updatedAt, GatewayReady: true}
+	out := Snapshot{Channels: []Channel{}, Endpoints: []EndpointStatus{}, Refreshing: e.refreshing, UpdatedAtUnix: e.updatedAt, GatewayReady: true}
 	for _, ch := range e.channels {
 		ch.sources = nil
 		ch.Sources = append([]SourceInfo{}, ch.Sources...)
@@ -534,7 +570,7 @@ func (e *Engine) Snapshot() Snapshot {
 	}
 	for _, endpoint := range e.config.Endpoints {
 		d := e.devices[endpoint.ID]
-		status := EndpointStatus{ID: endpoint.ID, Name: endpoint.Name, Enabled: endpoint.IsEnabled(), DeviceID: d.Discovery.DeviceID, Model: d.Discovery.ModelNumber, TunerCount: tunerLimit(endpoint, d), ChannelCount: len(d.Lineup), ProgramCount: len(d.Guide.Programs), LastSuccessUnix: d.LastSuccessUnix, Error: d.Error, GuideError: d.GuideError}
+		status := EndpointStatus{ID: endpoint.ID, Name: endpoint.Name, Enabled: endpoint.IsEnabled(), DeviceID: d.Discovery.DeviceID, Model: d.Discovery.ModelNumber, TunerCount: tunerLimit(endpoint, d), ChannelCount: len(d.Lineup), ProgramCount: d.ProgramCount, LastSuccessUnix: d.LastSuccessUnix, Error: d.Error, GuideError: d.GuideError}
 		for _, l := range e.leases {
 			if l.EndpointID == endpoint.ID {
 				status.InUse++

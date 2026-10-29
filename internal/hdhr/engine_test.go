@@ -239,7 +239,7 @@ func TestLargeGuideSurvivesRestartDuringUpstreamOutage(t *testing.T) {
 	if err = first.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(first.Snapshot().Programs); got != count {
+	if got := first.Snapshot().Endpoints[0].ProgramCount; got != count {
 		t.Fatalf("fresh guide: got %d, want %d", got, count)
 	}
 	first.Close()
@@ -254,7 +254,11 @@ func TestLargeGuideSurvivesRestartDuringUpstreamOutage(t *testing.T) {
 	}
 	_ = restored.Refresh(context.Background())
 	snap := restored.Snapshot()
-	if len(snap.Programs) != count || len(snap.Channels) != 1 {
-		t.Fatalf("cached guide lost after restart: %d programmes, %d channels", len(snap.Programs), len(snap.Channels))
+	actual, _, readErr := restored.guideView.Coverage(context.Background(), 0)
+	if readErr != nil || actual != count {
+		t.Fatalf("stored guide rows: %d %v", actual, readErr)
+	}
+	if snap.Endpoints[0].ProgramCount != count || len(snap.Channels) != 1 {
+		t.Fatalf("cached guide lost after restart: %d programmes, %d channels", snap.Endpoints[0].ProgramCount, len(snap.Channels))
 	}
 }

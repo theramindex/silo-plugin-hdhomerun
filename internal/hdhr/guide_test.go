@@ -5,7 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"github.com/theramindex/silo-plugins/pkg/epg"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -54,54 +55,94 @@ func TestGuideRefreshRetainsPrivateSnapshotAcrossOutageAndRestart(t *testing.T) 
 		t.Fatal(err)
 	}
 	snap := e.Snapshot()
-	if len(snap.Channels) != 1 || len(snap.Programs) != 1 || snap.Programs[0].ChannelID != snap.Channels[0].ID || !snap.Programs[0].IsNews || !snap.Programs[0].IsLive {
+	programs, err := e.Programs(context.Background(), nil, math.MinInt64, math.MaxInt64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Channels) != 1 || len(programs) != 1 || programs[0].ChannelID != snap.Channels[0].ID || !programs[0].IsNews || !programs[0].IsLive {
 		t.Fatalf("guide was not joined to lineup: %+v", snap)
 	}
-	first := snap.Programs[0].ID
+	first := programs[0].ID
+	metadata, view, found, err := e.guideStore.Load(context.Background())
+	if err != nil || !found {
+		t.Fatalf("persisted SQLite state: %v", err)
+	}
+	records, err := view.Query(context.Background(), epg.Query{Start: math.MinInt64, End: math.MaxInt64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy diskState
+	if err := json.Unmarshal(metadata, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		state := legacy.Devices[record.EndpointID]
+		state.ProgramCount = 0 // Old JSON did not have a separate programme count.
+		state.Guide.Programs = append(state.Guide.Programs, record.Program)
+		legacy.Devices[record.EndpointID] = state
+	}
 	e.Close()
-	file, err := os.Open(filepath.Join(dir, "catalog.json.gz"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	compressed, err := gzip.NewReader(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := io.ReadAll(compressed)
-	compressed.Close()
-	file.Close()
+	data, err := os.ReadFile(filepath.Join(dir, "guide.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), "must-not-persist") {
 		t.Fatal("device authorization escaped into disk cache")
 	}
-	st, _ := os.Stat(filepath.Join(dir, "catalog.json.gz"))
+	st, _ := os.Stat(filepath.Join(dir, "guide.sqlite"))
 	if st.Mode().Perm() != 0600 {
 		t.Fatalf("private cache permissions: %v", st.Mode())
 	}
-	// Existing installations still have plain JSON; exercise that migration.
-	if err := os.WriteFile(filepath.Join(dir, "catalog.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(dir, "catalog.json.gz")); err != nil {
-		t.Fatal(err)
-	}
-
-	offline.Store(true)
-	e, err = NewEngine(dir)
+	// Exercise one-time import from a pre-SQLite installation, keeping its JSON.
+	data, err = json.Marshal(legacy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close()
-	if err = e.Configure(cfg); err != nil {
-		t.Fatal(err)
+	offline.Store(true)
+	for _, name := range []string{"catalog.json", "catalog.json.gz"} {
+		t.Run(name, func(t *testing.T) {
+			legacyDir := t.TempDir()
+			file, err := os.OpenFile(filepath.Join(legacyDir, name), os.O_CREATE|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasSuffix(name, ".gz") {
+				compressed := gzip.NewWriter(file)
+				if _, err := compressed.Write(data); err != nil {
+					t.Fatal(err)
+				}
+				if err := compressed.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := file.Write(data); err != nil {
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := NewEngine(legacyDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restored.Close()
+			if err = restored.Configure(cfg); err != nil {
+				t.Fatal(err)
+			}
+			_ = restored.Refresh(context.Background())
+			snap := restored.Snapshot()
+			programs, err := restored.Programs(context.Background(), nil, math.MinInt64, math.MaxInt64)
+			if err != nil || len(snap.Channels) != 1 || len(programs) != 1 || programs[0].ID != first || snap.Endpoints[0].Error == "" {
+				t.Fatalf("offline legacy import: %d channels, %v programmes, %v", len(snap.Channels), programs, err)
+			}
+			if len(restored.devices["local"].Guide.Programs) != 0 {
+				t.Fatal("import retained the complete guide in memory")
+			}
+			if _, err = os.Stat(filepath.Join(legacyDir, name)); err != nil {
+				t.Fatal("legacy rollback copy removed", err)
+			}
+		})
 	}
-	_ = e.Refresh(context.Background())
-	snap = e.Snapshot()
-	if len(snap.Channels) != 1 || len(snap.Programs) != 1 || snap.Programs[0].ID != first || snap.Endpoints[0].Error == "" {
-		t.Fatalf("offline restart lost catalog or hid health failure: %+v", snap)
-	}
+
 }
 func TestXMLTVRejectsBrokenDocumentsAndAmbiguousMatches(t *testing.T) {
 	for _, raw := range []string{`<html></html>`, `<tv><channel id="a">`, `<tv></tv><tv></tv>`} {
