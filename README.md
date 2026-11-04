@@ -1,6 +1,6 @@
 # HDHomeRun for Silo
 
-Live TV from multiple physical or emulated HDHomeRun HTTP endpoints, built for the **Ramindex Silo fork**. Uses Silo Plugin SDK **v0.30.0** and the fork's `livetv/v1` contract.
+Live TV from multiple physical or emulated HDHomeRun HTTP endpoints, built for the **Ramindex Silo fork**. Uses Silo Plugin SDK **v0.32.1** and the fork's `livetv/v1` contract.
 
 - Explicit endpoint addresses, including URL path prefixes used by emulators.
 - Distinct channel IDs per endpoint, even when device IDs and channel numbers collide.

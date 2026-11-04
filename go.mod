@@ -3,7 +3,7 @@ module github.com/theramindex/silo-plugin-hdhomerun
 go 1.26.0
 
 require (
-	github.com/Silo-Server/silo-plugin-sdk v0.30.0
+	github.com/Silo-Server/silo-plugin-sdk v0.32.1
 	github.com/theramindex/silo-plugins v0.1.16-0.20261029231702-c1e02a48b1ce
 	golang.org/x/net v0.58.0
 	golang.org/x/text v0.41.0
