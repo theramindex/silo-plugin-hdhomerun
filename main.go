@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"os"
+	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 	publicmanifest "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/manifest"
@@ -22,8 +23,28 @@ var buildVersion string
 
 type runtimeServer struct {
 	runtimedefault.Server
+	pluginv1.UnimplementedConfigurationChecksServer
 	manifest *pluginv1.PluginManifest
 	engine   *hdhr.Engine
+}
+
+func (s *runtimeServer) TestConfiguration(ctx context.Context, request *pluginv1.TestConfigurationRequest) (*pluginv1.TestConfigurationResponse, error) {
+	var cfg hdhr.Config
+	for _, entry := range request.GetConfig() {
+		if entry.GetKey() != "connection" {
+			continue
+		}
+		encoded, err := json.Marshal(entry.GetValue().AsMap())
+		if err != nil || json.Unmarshal(encoded, &cfg) != nil {
+			return &pluginv1.TestConfigurationResponse{Message: "Invalid endpoint configuration."}, nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := hdhr.CheckConfiguration(ctx, cfg); err != nil {
+		return &pluginv1.TestConfigurationResponse{Message: err.Error()}, nil
+	}
+	return &pluginv1.TestConfigurationResponse{Ok: true}, nil
 }
 
 func (s *runtimeServer) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
@@ -68,5 +89,11 @@ func main() {
 	}
 	defer engine.Close()
 	server := &pluginimpl.Server{Engine: engine}
-	sdkruntime.Serve(sdkruntime.ServeConfig{Servers: sdkruntime.CapabilityServers{Runtime: &runtimeServer{manifest: manifest, engine: engine}, HttpRoutes: server, ScheduledTask: server}})
+	runtime := &runtimeServer{manifest: manifest, engine: engine}
+	sdkruntime.ServeManifestWithOptions(manifestJSON, buildVersion, sdkruntime.CapabilityServers{HttpRoutes: server, ScheduledTask: server},
+		sdkruntime.WithConfigurationChecks(runtime),
+		sdkruntime.WithConfigure(func(ctx context.Context, entries []*pluginv1.ConfigEntry) error {
+			_, err := runtime.Configure(ctx, &pluginv1.ConfigureRequest{Config: entries})
+			return err
+		}))
 }

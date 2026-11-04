@@ -535,6 +535,7 @@
   function edit(index) {
     state.editing = index;
     const e = state.config.endpoints[index] || {
+      id: "device-" + crypto.randomUUID(),
       name: "",
       url: "",
       enabled: true,
@@ -544,6 +545,7 @@
       allowed_hosts: [],
       channels: {},
     };
+    state.draftEndpointID = e.id;
     const form = $("editor");
     form.reset();
     for (const name of [
@@ -596,45 +598,50 @@
     await api("/admin/api/refresh", "POST");
     await loadState();
   }
+  function draftEndpointConfig() {
+    const form = $("editor");
+    const existing = state.config.endpoints[state.editing] || {};
+    const e = {
+      ...existing,
+      id: existing.id || state.draftEndpointID,
+      name: form.elements.name.value.trim(),
+      url: form.elements.url.value.trim(),
+      enabled: form.elements.enabled.checked,
+      tuner_limit: Number(form.elements.tuner_limit.value),
+      capacity_group: form.elements.capacity_group.value.trim(),
+      shared_tuner_limit: Number(form.elements.shared_tuner_limit.value),
+      priority: Number(form.elements.priority.value),
+      guide_mode: form.elements.guide_mode.value,
+      guide_url: form.elements.guide_url.value.trim(),
+      guide_url_file: form.elements.guide_url_file.value.trim(),
+      allowed_hosts: form.elements.allowed_hosts.value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+      channels: { ...(existing.channels || {}) },
+    };
+    $("mapping-rows")
+      .querySelectorAll("tr")
+      .forEach((row) => {
+        const m = {};
+        row.querySelectorAll("input").forEach((input) => {
+          const value =
+            input.type === "checkbox" ? input.checked : input.value.trim();
+          if (value) m[input.dataset.field] = value;
+        });
+        e.channels[row.dataset.number] = m;
+      });
+    const cfg = structuredClone(state.config);
+    if (state.editing < 0) cfg.endpoints.push(e);
+    else cfg.endpoints[state.editing] = e;
+    return cfg;
+  }
   $("editor").onsubmit = async (event) => {
     event.preventDefault();
     $("save").disabled = true;
+    $("check-connection").disabled = true;
     try {
-      const form = event.currentTarget;
-      const existing = state.config.endpoints[state.editing] || {};
-      const e = {
-        ...existing,
-        id: existing.id || "device-" + crypto.randomUUID(),
-        name: form.elements.name.value.trim(),
-        url: form.elements.url.value.trim(),
-        enabled: form.elements.enabled.checked,
-        tuner_limit: Number(form.elements.tuner_limit.value),
- capacity_group:form.elements.capacity_group.value.trim(),
- shared_tuner_limit:Number(form.elements.shared_tuner_limit.value),
-        priority: Number(form.elements.priority.value),
-        guide_mode: form.elements.guide_mode.value,
-        guide_url: form.elements.guide_url.value.trim(),
-        guide_url_file: form.elements.guide_url_file.value.trim(),
-        allowed_hosts: form.elements.allowed_hosts.value
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-        channels: { ...(existing.channels || {}) },
-      };
-      $("mapping-rows")
-        .querySelectorAll("tr")
-        .forEach((row) => {
-          const m = {};
-          row.querySelectorAll("input").forEach((input) => {
-            const value =
-              input.type === "checkbox" ? input.checked : input.value.trim();
-            if (value) m[input.dataset.field] = value;
-          });
-          e.channels[row.dataset.number] = m;
-        });
-      const cfg = structuredClone(state.config);
-      if (state.editing < 0) cfg.endpoints.push(e);
-      else cfg.endpoints[state.editing] = e;
+      const cfg = draftEndpointConfig();
       await persist(cfg);
       $("editor").hidden = true;
       notice("Endpoint saved. The lineup is refreshing.");
@@ -642,8 +649,34 @@
       $("save-status").textContent = e.message;
     } finally {
       $("save").disabled = false;
+      $("check-connection").disabled = false;
     }
   };
+  $("check-connection").onclick = async () => {
+    const form = $("editor");
+    if (!form.reportValidity()) return;
+    $("check-connection").disabled = true;
+    $("save").disabled = true;
+    $("save-status").textContent = "Checking discovery and lineup…";
+    const draft = draftEndpointConfig();
+    const signature = JSON.stringify(draft);
+    try {
+      const result = await api(
+        "/admin/plugins/installations/" + installation + "/config/test",
+        "POST", { key: "connection", value: draft }, true,
+      );
+      // Don't show a result beside fields edited while the request was running.
+      if (JSON.stringify(draftEndpointConfig()) === signature)
+        $("save-status").textContent = result.message;
+    } catch (error) {
+      if (JSON.stringify(draftEndpointConfig()) === signature)
+        $("save-status").textContent = error.message;
+    } finally {
+      $("check-connection").disabled = false;
+      $("save").disabled = false;
+    }
+  };
+  $("editor").addEventListener("input", () => { $("save-status").textContent = ""; });
   $("device-list").onclick = async (event) => {
     const editButton = event.target.closest("[data-edit]");
     if (editButton) return edit(Number(editButton.dataset.edit));
