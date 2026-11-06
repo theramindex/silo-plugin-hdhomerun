@@ -99,14 +99,20 @@
     if (!core) state.relay = r.headers.get("X-Silo-Stream-Relay") === "1";
     if (!r.ok) {
       const b = await r.json().catch(() => ({}));
+      // Plugin routes return {error}; Silo's /api/v2 returns problem details.
+      const statuses = {
+        401: "Sign in to Silo to continue.",
+        403: "Administrator access required.",
+        ...(core ? {} : { 409: "All available tuners are in use." }),
+      };
       throw new Error(
-        b.error ||
-          {
-            401: "Sign in to Silo to continue.",
-            403: "Administrator access required.",
-            409: "All available tuners are in use.",
-          }[r.status] ||
-          "The request could not finish. Try again.",
+        sentence(
+          b.error ||
+            b.detail ||
+            statuses[r.status] ||
+            b.title ||
+            "The request could not finish. Try again.",
+        ),
       );
     }
     return r.status === 204 ? {} : r.json();
@@ -128,9 +134,97 @@
       hour: "numeric",
       minute: "2-digit",
     });
-  function notice(message) {
-    $("notice").textContent = message;
-    $("notice").hidden = !message;
+  // Server messages may be lowercase fragments; show them as sentences.
+  function sentence(text) {
+    const value = String(text ?? "").trim();
+    if (!value) return "";
+    const capital = value[0].toUpperCase() + value.slice(1);
+    return /[.!?…]$/.test(capital) ? capital : capital + ".";
+  }
+  let noticeTimer,
+    noticeSource = "";
+  // kind: "success", "warning" or "error". Success clears itself; a "poll"
+  // error clears when the next background refresh succeeds.
+  function notice(message, kind = "error", source = "") {
+    clearTimeout(noticeTimer);
+    noticeSource = message ? source : "";
+    $("notice-text").textContent = message ? sentence(message) : "";
+    $("notice-body").dataset.kind = kind;
+    $("notice-body").hidden = !message;
+    if (message && kind === "success")
+      noticeTimer = setTimeout(() => notice(""), 6000);
+  }
+  function clearPollNotice() {
+    if (noticeSource === "poll") notice("");
+  }
+  // Re-rendering replaces the focused button. Remember it by its data key and
+  // focus its replacement afterwards.
+  const focusKeys = [
+    "data-channel",
+    "data-favorite",
+    "data-program",
+    "data-source",
+    "data-recent",
+    "data-edit",
+    "data-remove",
+  ];
+  function keepFocus(render) {
+    const active = document.activeElement;
+    const attr = active && focusKeys.find((key) => active.hasAttribute?.(key));
+    const value = attr && active.getAttribute(attr);
+    render();
+    const now = document.activeElement;
+    if (!attr || (now && now !== document.body && now.isConnected)) return;
+    const next = Array.from(document.querySelectorAll("[" + attr + "]")).find(
+      (el) => el.getAttribute(attr) === value,
+    );
+    next?.focus({ preventScroll: true });
+  }
+  // Markup is built from esc()-escaped values. Skip identical writes so
+  // background polls leave the page (and focus) alone.
+  const rendered = new WeakMap();
+  function setHTML(el, html) {
+    if (rendered.get(el) === html) return false;
+    rendered.set(el, html);
+    el.innerHTML = html;
+    return true;
+  }
+  function ago(unix) {
+    const minutes = Math.max(0, Math.round((Date.now() / 1000 - unix) / 60));
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return minutes + " min ago";
+    const hours = Math.round(minutes / 60);
+    return hours < 48 ? hours + " h ago" : Math.round(hours / 24) + " days ago";
+  }
+  // Device errors are short internal strings; turn the common ones into guidance.
+  function deviceProblem(error) {
+    const known = {
+      "device request failed": "The device didn’t answer.",
+      "device returned an unsuccessful HTTP status": "The device returned an error.",
+      "device returned invalid JSON":
+        "The address answered, but not like an HDHomeRun device.",
+      "device response is too large or incomplete":
+        "The device sent an incomplete response.",
+      "network address is not permitted": "This address isn’t allowed.",
+    };
+    return known[error] || sentence(error);
+  }
+  function offline(endpoint) {
+    return !!endpoint && endpoint.enabled !== false && !!endpoint.error;
+  }
+  function channelOffline(c) {
+    const status = new Map(state.endpoints.map((e) => [e.id, e]));
+    return (
+      c.sources.length > 0 &&
+      c.sources.every((s) => offline(status.get(s.endpointId)))
+    );
+  }
+  // Guide windows start at the current local time rounded down to the half
+  // hour; Previous/Next move three hours from there.
+  function guideStart() {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() < 30 ? 0 : 30, 0, 0);
+    return Math.floor(d.getTime() / 1000) + state.offset;
   }
   function nowProgramme(c) {
     const now = Date.now() / 1000;
@@ -209,15 +303,34 @@
       !state.source && !state.onlyFavorites,
     );
     $("favorites").setAttribute("aria-pressed", String(state.onlyFavorites));
-    $("source-groups").innerHTML = state.endpoints
-      .map(
-        (e) =>
-          `<button type="button" class="group-button ${state.source === e.id ? "active" : ""}" data-source="${esc(e.id)}" aria-pressed="${state.source === e.id}"><span>${esc(e.name)}</span><small>${(counts.get(e.id) || 0).toLocaleString()}</small></button>`,
-      )
-      .join("");
+    setHTML(
+      $("source-groups"),
+      state.endpoints
+        .map(
+          (e) =>
+            `<button type="button" class="group-button ${state.source === e.id ? "active" : ""}" data-source="${esc(e.id)}" aria-pressed="${state.source === e.id}"><span>${esc(e.name)}${offline(e) ? ' <span class="offline-tag">· Offline</span>' : ""}</span><small>${(counts.get(e.id) || 0).toLocaleString()}</small></button>`,
+        )
+        .join(""),
+    );
+  }
+  function emptyMessage() {
+    if (state.channels.length) return "No channels match these filters.";
+    const devices = state.admin
+      ? ` <a href="${esc($("manage-devices").href)}">Open Devices</a>`
+      : "";
+    return state.endpoints.length
+      ? state.admin
+        ? "No channels yet. Check the tuner connection, then refresh the lineup." + devices
+        : "No channels yet. Ask an administrator to check the tuner connection."
+      : state.admin
+        ? "No tuners connected yet. Add a tuner or HDHomeRun-compatible service to start watching." + devices
+        : "No tuners connected yet. An administrator can add one.";
   }
   function renderChannels() {
- renderRecent();
+    keepFocus(drawChannels);
+  }
+  function drawChannels() {
+    renderRecent();
     const list = visible();
     const page = pageChannels();
     const guide = selectedGuide();
@@ -233,20 +346,18 @@
       !guide && state.onlyFavorites ? "page" : "false",
     );
     $("channel-count").textContent = list.length.toLocaleString() + " channels";
-    $("empty").hidden = list.length > 0;
-    $("empty").textContent = !state.channels.length
-      ? state.endpoints.length
-        ? "No channels yet. Check the endpoint connection in Devices, then refresh the lineup."
-        : "No devices connected yet. An administrator can add a tuner or emulator in Devices."
-      : "No channels match these filters.";
+    $("empty").hidden = state.loaded && list.length > 0;
+    if (state.loaded) setHTML($("empty"), emptyMessage());
     $("page-range").textContent = list.length
       ? `${(state.page * 60 + 1).toLocaleString()}–${(state.page * 60 + page.length).toLocaleString()} of ${list.length.toLocaleString()}`
       : "0 channels";
     $("page-previous").disabled = state.page === 0;
     $("page-next").disabled = (state.page + 1) * 60 >= list.length;
-    const start = Math.floor(Date.now() / 1000 / 10800) * 10800 + state.offset;
+    const start = guideStart();
     const end = start + 10800;
-    const now = Date.now() / 1000;
+    // Whole minutes: progress and the now line move once a minute, so
+    // unchanged polls produce identical markup and skip the DOM write.
+    const now = Math.floor(Date.now() / 60000) * 60;
     $("guide-time").textContent =
       new Date(start * 1000).toLocaleString([], {
         weekday: "short",
@@ -261,6 +372,7 @@
       .map((c) => {
         const p = nowProgramme(c);
         const selected = state.selected?.id === c.id;
+        const down = channelOffline(c);
         if (guide) {
           const programs = state.programs.filter(
             (p) =>
@@ -274,25 +386,40 @@
                 ((Math.min(p.endUnix, end) - Math.max(p.startUnix, start)) /
                   10800) *
                 100;
-              return `<button class="programme ${p.startUnix <= now && p.endUnix > now ? "live" : ""}" data-program="${esc(p.id)}" style="left:${left}%;width:calc(${width}% - 4px)" title="${esc(p.title)}" aria-label="${esc(c.name + " · " + p.title + " · " + clock(p.startUnix) + "–" + clock(p.endUnix))}"><strong>${esc(p.title)}</strong><time>${clock(p.startUnix)}–${clock(p.endUnix)}</time></button>`;
+              const when =
+                p.endUnix <= now
+                  ? "ended"
+                  : p.startUnix <= now
+                    ? "live"
+                    : "";
+              return `<button class="programme ${when}" data-program="${esc(p.id)}" style="left:${left}%;width:calc(${width}% - 4px)" title="${esc(p.title)}" aria-label="${esc(c.name + " · " + p.title + " · " + clock(p.startUnix) + "–" + clock(p.endUnix) + (when === "ended" ? " · Ended" : when === "live" ? " · On now" : ""))}"><strong>${esc(p.title)}</strong><time>${clock(p.startUnix)}–${clock(p.endUnix)}</time></button>`;
             })
             .join("");
           const marker =
             now >= start && now < end
               ? `<span class="guide-now" style="left:${((now - start) / 10800) * 100}%" aria-hidden="true"></span>`
               : "";
-          return `<article class="guide-row ${selected ? "selected" : ""}"><div class="guide-title"><button class="channel-main" data-channel="${esc(c.id)}" aria-label="${esc(c.number + " " + c.name)}">${logo(c)}<span class="channel-name"><strong>${esc(c.name)}</strong><small>${esc(c.number)}</small></span></button>${star(c)}</div><div class="programme-rail">${cells || '<span class="programme-empty">Programme information unavailable</span>'}${marker}</div></article>`;
+          return `<article class="guide-row ${selected ? "selected" : ""}"><div class="guide-title"><button class="channel-main" data-channel="${esc(c.id)}" aria-label="${esc(c.number + " " + c.name + (down ? ", source offline" : ""))}">${logo(c)}<span class="channel-name"><strong>${esc(c.name)}</strong><small>${esc(c.number)}${down ? ' · <span class="offline-tag">Offline</span>' : ""}</small></span></button>${star(c)}</div><div class="programme-rail">${cells || '<span class="programme-empty">Programme information unavailable</span>'}${marker}</div></article>`;
         }
         const pct = p
-          ? Math.max(
-              0,
-              Math.min(
-                100,
-                ((now - p.startUnix) / (p.endUnix - p.startUnix)) * 100,
+          ? Math.round(
+              Math.max(
+                0,
+                Math.min(
+                  100,
+                  ((now - p.startUnix) / (p.endUnix - p.startUnix)) * 100,
+                ),
               ),
             )
           : 0;
-        return `<article class="channel-row ${selected ? "selected" : ""}"><button class="channel-main" data-channel="${esc(c.id)}" aria-label="${esc(c.number + " " + c.name)}">${logo(c)}<span class="channel-name"><strong>${esc(c.name)}</strong><small>${esc(c.number)}${c.protected ? " · Protected" : c.sources.length > 1 ? " · " + c.sources.length + " sources" : ""}</small></span><span class="channel-program"><strong>${p ? esc(p.title) : "Programme unavailable"}</strong>${p ? "<small>" + clock(p.startUnix) + "–" + clock(p.endUnix) + '</small><span class="progress" aria-hidden="true"><i style="width:' + pct + '%"></i></span>' : "<small>Watch live for this channel</small>"}</span></button>${star(c)}</article>`;
+        const meta = c.protected
+          ? " · Protected"
+          : down
+            ? ' · <span class="offline-tag">Source offline</span>'
+            : c.sources.length > 1
+              ? " · " + c.sources.length + " sources"
+              : "";
+        return `<article class="channel-row ${selected ? "selected" : ""}"><button class="channel-main" data-channel="${esc(c.id)}" aria-label="${esc(c.number + " " + c.name + (down ? ", source offline" : ""))}">${logo(c)}<span class="channel-name"><strong>${esc(c.name)}</strong><small>${esc(c.number)}${meta}</small></span><span class="channel-program"><strong>${p ? esc(p.title) : "Programme unavailable"}</strong>${p ? "<small>" + clock(p.startUnix) + "–" + clock(p.endUnix) + '</small><span class="progress" aria-hidden="true"><i style="width:' + pct + '%"></i></span>' : "<small>Watch live for this channel</small>"}</span></button>${star(c)}</article>`;
       })
       .join("");
     if (guide && page.length) {
@@ -301,20 +428,20 @@
         times += `<time style="left:${(offset / 10800) * 100}%">${clock(start + offset)}</time>`;
       body = `<div class="guide-grid"><div class="guide-heading"><span>Channel</span><div class="guide-hours">${times}</div></div>${body}</div>`;
     }
-    $("channel-list").innerHTML = body;
-    $("channel-list")
-      .querySelectorAll("img")
-      .forEach(
-        (img) =>
-          (img.onerror = () => {
-            const el = img.parentElement;
-            el.textContent =
-              el
-                .closest("[data-channel]")
-                ?.getAttribute("aria-label")
-                ?.split(" ")[0] || "";
-          }),
-      );
+    if (setHTML($("channel-list"), body))
+      $("channel-list")
+        .querySelectorAll("img")
+        .forEach(
+          (img) =>
+            (img.onerror = () => {
+              const el = img.parentElement;
+              el.textContent =
+                el
+                  .closest("[data-channel]")
+                  ?.getAttribute("aria-label")
+                  ?.split(" ")[0] || "";
+            }),
+        );
     renderGroups();
   }
   function closeDetail() {
@@ -327,9 +454,29 @@
       "<h2>Select a channel</h2><p>See what’s on and start watching.</p></div>";
     renderChannels();
   }
+  // Describe a chosen programme honestly: only one that is airing is "live".
+  function programmeDetail(c, p) {
+    const now = Date.now() / 1000;
+    if (!p)
+      return "<strong>Programme information unavailable</strong><p>You can still watch this channel live.</p>";
+    const time = `<time>${clock(p.startUnix)}–${clock(p.endUnix)}</time>`;
+    const summary = `<p>${esc(p.summary || "")}</p>`;
+    if (p.startUnix <= now && p.endUnix > now)
+      return `<strong>${esc(p.title)}</strong>${time}${summary}`;
+    const day = new Date(p.startUnix * 1000).toLocaleDateString([], {
+      weekday: "short",
+    });
+    const status =
+      p.endUnix <= now
+        ? `Ended at ${clock(p.endUnix)}.`
+        : `Airs ${day} ${clock(p.startUnix)}. Watching now shows what’s on the channel at the moment.`;
+    return `<strong>${esc(p.title)}</strong>${time}${summary}<p class="programme-status">${esc(status)}</p>`;
+  }
   function selectChannel(c, p) {
     state.selected = c;
     if (!p) p = nowProgramme(c);
+    const now = Date.now() / 1000;
+    const airing = !p || (p.startUnix <= now && p.endUnix > now);
     document.body.classList.add("detail-open");
     const active = state.media && $("video");
     if (!active)
@@ -337,8 +484,9 @@
         '<div class="detail-header"><span>Live TV</span><div class="actions"><button id="stop" hidden>Stop</button><button id="player-options-open" type="button">Options</button><button class="icon-button" id="detail-close" aria-label="Close channel details">' +
         icon("close") +
         '</button></div></div><video id="video" controls playsinline hidden></video><div id="play-status" role="status" hidden></div><div class="detail-body" id="detail-body"></div>';
+    const down = channelOffline(c);
     $("detail-body").innerHTML =
-      `<h2>${esc(c.name)}</h2><span class="detail-channel">${esc(c.number)} · ${esc(c.sources.map((s) => s.name).join(" · "))}</span><div class="detail-programme">${p ? `<strong>${esc(p.title)}</strong><time>${clock(p.startUnix)}–${clock(p.endUnix)}</time><p>${esc(p.summary || "")}</p>` : "<strong>Programme information unavailable</strong><p>You can still watch this channel live.</p>"}</div><div class="actions"><button class="primary" id="watch" ${c.protected ? "disabled" : ""}>${icon("play")}${c.protected ? "Protected channel" : "Watch live"}</button></div>`;
+      `<h2>${esc(c.name)}</h2><span class="detail-channel">${esc(c.number)} · ${esc(c.sources.map((s) => s.name).join(" · "))}</span><div class="detail-programme">${programmeDetail(c, p)}</div>${down ? '<p class="source-warning">This channel’s source is offline right now, so playback may not start.</p>' : ""}<div class="actions"><button class="primary" id="watch" ${c.protected ? "disabled" : ""}>${icon("play")}${c.protected ? "Protected channel" : airing ? "Watch live" : "Watch channel now"}</button></div>`;
     $("detail-body").insertAdjacentHTML("beforeend",`<div class="player-tools"><button type="button" data-player-mode="compatible" ${c.protected?"disabled":""}>Compatible playback</button><button type="button" data-player-mode="rewind" ${c.protected?"disabled":""}>Live Rewind</button><button type="button" id="add-multiview" ${c.protected?"disabled":""}>Add to multiview</button><details><summary>Player options</summary><div class="player-options"><button type="button" data-video-action="previous">Previous channel</button><button type="button" data-video-action="next">Next channel</button><button type="button" data-video-action="rewind">Back 30 seconds</button><button type="button" data-video-action="forward">Forward 30 seconds</button><button type="button" data-video-action="live">Go live</button><button type="button" data-video-action="aspect">Fit / fill screen</button><button type="button" data-video-action="pip">Picture in Picture</button><button type="button" data-video-action="fullscreen">Fullscreen</button><label>Audio track<select id="audio-track"><option value="0">Default audio</option></select></label></div></details></div>`);
     $("detail-body").querySelectorAll("[data-player-mode]").forEach(b=>b.onclick=()=>play(c,b.dataset.playerMode));
     $("detail-body").querySelectorAll("[data-video-action]").forEach(b=>b.onclick=()=>videoAction(b.dataset.videoAction));
@@ -407,18 +555,19 @@
   }
   async function addTile(channel) {
     const viewer=profile();
+    // Check limits first so a refused add never stops the current stream.
+    if(state.tiles.size>=4){notice("Multiview supports up to four channels. Remove one to add another.","warning");return}
+    if(state.tiles.has(channel.id)){notice("This channel is already in multiview.","warning");return}
     await stopPlayer();
-    if(state.tiles.size>=4){notice("Multiview supports up to four channels.");return}
-    if(state.tiles.has(channel.id)){notice("This channel is already in multiview.");return}
     const tile=document.createElement("article");tile.className="multiview-tile";
-    tile.innerHTML=`<header><strong>${esc(channel.name)}</strong><button type="button" data-audio aria-label="Listen to ${esc(channel.name)}">Audio</button><button type="button" data-remove aria-label="Remove ${esc(channel.name)}">${icon("close")}</button></header><video controls playsinline muted></video><p role="status"></p>`;
+    tile.innerHTML=`<header><strong>${esc(channel.name)}</strong><button type="button" data-audio aria-pressed="false" aria-label="Listen to ${esc(channel.name)}">Audio</button><button type="button" data-remove aria-label="Remove ${esc(channel.name)}">${icon("close")}</button></header><video controls playsinline muted></video><p role="status"></p>`;
     $("multiview-grid").append(tile);$("multiview").hidden=false;
     const video=tile.querySelector("video");video.muted=true;
     const label=tile.querySelector("p");
     const media=new SiloLiveMedia(mediaOptions(video,message=>label.textContent=message,message=>label.textContent=message));
     state.tiles.set(channel.id,{tile,media,video});
     tile.querySelector("[data-remove]").onclick=()=>removeTile(channel.id);
-    tile.querySelector("[data-audio]").onclick=()=>{for(const item of state.tiles.values())item.video.muted=item.video!==video;};
+    tile.querySelector("[data-audio]").onclick=()=>{for(const item of state.tiles.values()){item.video.muted=item.video!==video;item.tile.querySelector("[data-audio]").setAttribute("aria-pressed",String(item.video===video));}};
     await media.play(channel.id);if(viewer===profile()&&state.tiles.has(channel.id))remember(channel.id);
   }
   async function removeTile(id){const item=state.tiles.get(id);if(!item)return;state.tiles.delete(id);item.tile.remove();$("multiview").hidden=state.tiles.size===0;await item.media.stop();}
@@ -454,13 +603,13 @@
       await api(path,"PUT",{values},true);
       if(viewer!==profile())return;
       state.favorites=target.favorites||{};state.recent=target.recentChannels||[];renderChannels();
-    }).catch(error=>notice("Could not save preferences: "+error.message));
+    }).catch(error=>notice("Could not save preferences. "+sentence(error.message),"error"));
   }
   function favorite(id){const value=!state.favorites[id];updatePreferences(target=>{target.favorites={...(target.favorites||{})};if(value)target.favorites[id]=true;else delete target.favorites[id];target.favoriteOrder=(target.favoriteOrder||[]).filter(x=>x!==id);if(value)target.favoriteOrder.push(id);});}
   function remember(id){updatePreferences(target=>{target.recentChannels=[id,...(target.recentChannels||[]).filter(x=>x!==id)].slice(0,20);});}
-  function renderRecent(){const root=$("recent-channels");root.hidden=!state.onlyFavorites||state.recent.length===0;root.innerHTML='<h2>Recently watched</h2><div class="recent-list">'+state.recent.map(id=>state.channels.find(c=>c.id===id)).filter(Boolean).map(c=>`<button type="button" data-recent="${esc(c.id)}">${logo(c)}<span>${esc(c.name)}</span></button>`).join("")+"</div>";root.querySelectorAll("[data-recent]").forEach(button=>button.onclick=()=>{const channel=state.channels.find(c=>c.id===button.dataset.recent);if(channel)play(channel);});}
+  function renderRecent(){const root=$("recent-channels");root.hidden=!state.onlyFavorites||state.recent.length===0;if(!setHTML(root,'<h2>Recently watched</h2><div class="recent-list">'+state.recent.map(id=>state.channels.find(c=>c.id===id)).filter(Boolean).map(c=>`<button type="button" data-recent="${esc(c.id)}">${logo(c)}<span>${esc(c.name)}</span></button>`).join("")+"</div>"))return;root.querySelectorAll("[data-recent]").forEach(button=>button.onclick=()=>{const channel=state.channels.find(c=>c.id===button.dataset.recent);if(channel)play(channel);});}
   async function loadGuide() {
-    const start = Math.floor(Date.now() / 1000 / 10800) * 10800 + state.offset;
+    const start = guideStart();
     const ids = pageChannels().map((c) => c.id);
     const key = JSON.stringify([start, ids]);
     state.guideRequest = key;
@@ -481,21 +630,35 @@
     state.programs = result.programs || [];
     renderChannels();
   }
-  async function loadState() {
+  async function loadState(poll = false) {
     const data = await api("/api/state");
-    const options =
-      '<option value="">All endpoints</option>' +
-      (data.endpoints || [])
-        .map((e) => `<option value="${esc(e.id)}">${esc(e.name)}</option>`)
-        .join("");
-    if ($("source").innerHTML !== options) {
-      $("source").innerHTML = options;
-      $("source").value = state.source;
-      if (!$("source").value) state.source = "";
+    clearPollNotice();
+    // Polls skip rendering when the state and the displayed minute are unchanged.
+    const signature =
+      JSON.stringify(data) + Math.floor(Date.now() / 60000);
+    if (poll && signature === state.signature) return;
+    state.signature = signature;
+    const select = $("source");
+    const focused = document.activeElement === select;
+    if (
+      setHTML(
+        select,
+        '<option value="">All sources</option>' +
+          (data.endpoints || [])
+            .map((e) => `<option value="${esc(e.id)}">${esc(e.name)}</option>`)
+            .join(""),
+      )
+    ) {
+      select.value = state.source;
+      if (!select.value) state.source = "";
+      if (focused) select.focus({ preventScroll: true });
     }
     Object.assign(state, {
       channels: data.channels || [],
       endpoints: data.endpoints || [],
+      refreshing: !!data.refreshing,
+      admin: !!data.admin,
+      loaded: true,
     });
     $("devices-tab").hidden = !data.admin;
     const theme = encodeURIComponent(
@@ -505,10 +668,15 @@
     $("manage-devices").hidden = !data.admin;
     $("manage-devices").href = base + "/admin?theme=" + theme;
     $("admin-channels").href = base + "?theme=" + theme + "#channels";
+    const enabled = state.endpoints.filter((e) => e.enabled !== false);
+    const online = enabled.filter((e) => !e.error && e.lastSuccessUnix).length;
     $("connection").textContent = data.refreshing
       ? "Refreshing…"
-      : state.endpoints.filter((e) => e.enabled && !e.error).length +
-        " endpoints online";
+      : !enabled.length
+        ? "No sources"
+        : online === enabled.length
+          ? `${online} ${online === 1 ? "source" : "sources"} online`
+          : `${online} of ${enabled.length} sources online`;
     if (adminPage) renderDevices();
     else {
       renderChannels();
@@ -522,18 +690,38 @@
       }
     }
   }
+  function deviceHealth(e, health) {
+    if (e.enabled === false) return '<p class="health">Disabled</p>';
+    if (health?.error) {
+      const last = health.lastSuccessUnix
+        ? ` Last connected ${ago(health.lastSuccessUnix)}.`
+        : "";
+      return `<p class="error">Offline. ${esc(deviceProblem(health.error))}${last} Check the device’s power and network, then select Refresh lineup.</p>`;
+    }
+    if (health?.lastSuccessUnix) return '<p class="health">Connected</p>';
+    return `<p>${state.refreshing ? "Connecting…" : "Not connected yet. Select Refresh lineup to check now."}</p>`;
+  }
   function renderDevices() {
-    $("device-list").innerHTML = state.config.endpoints.length
-      ? state.config.endpoints
-          .map((e, i) => {
-            const health = state.endpoints.find((s) => s.id === e.id);
-            return `<article class="device"><div><h3>${esc(e.name || e.id)}</h3><p>${esc(e.url)}</p><p>${esc(health?.model || "HDHomeRun-compatible endpoint")}</p></div><div class="device-health"><p class="${health?.error ? "error" : "health"}">${e.enabled === false ? "Disabled" : health?.error ? esc(health.error) : health?.lastSuccessUnix ? "Connected" : "Waiting for discovery"}</p><p>${health?.channelCount || 0} channels · ${health?.inUse || 0} / ${health?.tunerCount || "—"} tuners reserved</p>${health?.capacityGroup?`<p>Server ${esc(health.capacityGroup)}: ${health.sharedInUse||0} / ${health.sharedTunerLimit} shared tuners</p>`:""}${health?.guideError ? `<p class="error">Guide: ${esc(health.guideError)}</p>` : e.guide_mode && e.guide_mode !== "none" ? `<p>${health?.programCount || 0} programmes</p>` : "<p>No guide configured</p>"}</div><div class="actions"><button data-edit="${i}">Edit</button><button data-remove="${i}">Remove</button></div></article>`;
-          })
-          .join("")
-      : '<p class="device-empty">No endpoints connected. Add the HTTP address of your tuner or emulator to discover its lineup. Each endpoint keeps its own channels and tuner capacity.</p>';
+    keepFocus(() =>
+      setHTML(
+        $("device-list"),
+        !state.configLoaded
+          ? '<p class="device-empty">Loading devices…</p>'
+          : state.config.endpoints.length
+            ? state.config.endpoints
+                .map((e, i) => {
+                  const health = state.endpoints.find((s) => s.id === e.id);
+                  return `<article class="device"><div><h3>${esc(e.name || e.id)}</h3><p>${esc(e.url)}</p><p>${esc(health?.model || "HDHomeRun-compatible endpoint")}</p></div><div class="device-health">${deviceHealth(e, health)}<p>${health?.channelCount || 0} channels · ${health?.inUse || 0} / ${health?.tunerCount || "—"} tuners reserved</p>${health?.capacityGroup ? `<p>Server ${esc(health.capacityGroup)}: ${health.sharedInUse || 0} / ${health.sharedTunerLimit} shared tuners</p>` : ""}${health?.guideError ? `<p class="error">Guide: ${esc(sentence(health.guideError))}</p>` : e.guide_mode && e.guide_mode !== "none" ? `<p>${health?.programCount || 0} programmes</p>` : "<p>No guide configured</p>"}</div><div class="actions"><button type="button" data-edit="${i}" aria-label="Edit ${esc(e.name || e.id)}">Edit</button><button type="button" data-remove="${i}" aria-label="Remove ${esc(e.name || e.id)}">Remove</button></div></article>`;
+                })
+                .join("")
+            : '<p class="device-empty">No tuners connected yet. Select Add endpoint and enter your tuner’s address, for example 192.168.1.30, or the HDHomeRun address of a compatible service. Each endpoint keeps its own channels and tuner capacity.</p>',
+      ),
+    );
   }
   function edit(index) {
     state.editing = index;
+    // Return focus here when the editor closes.
+    state.opener = index < 0 ? "add" : state.config.endpoints[index]?.id;
     const e = state.config.endpoints[index] || {
       id: "device-" + crypto.randomUUID(),
       name: "",
@@ -581,7 +769,7 @@
       })
       .join("");
     $("mapping-empty").hidden = numbers.size > 0;
-    $("save-status").textContent = "";
+    status("");
     form.hidden = false;
     form.scrollIntoView({ block: "start", behavior: "instant" });
     form.elements.name.focus();
@@ -598,14 +786,19 @@
     await api("/admin/api/refresh", "POST");
     await loadState();
   }
-  function draftEndpointConfig() {
+  // A bare host such as 192.168.1.30 means http://192.168.1.30.
+  function endpointAddress(value) {
+    const text = value.trim();
+    return !text || /^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : "http://" + text;
+  }
+  function draftEndpoint() {
     const form = $("editor");
     const existing = state.config.endpoints[state.editing] || {};
     const e = {
       ...existing,
       id: existing.id || state.draftEndpointID,
       name: form.elements.name.value.trim(),
-      url: form.elements.url.value.trim(),
+      url: endpointAddress(form.elements.url.value),
       enabled: form.elements.enabled.checked,
       tuner_limit: Number(form.elements.tuner_limit.value),
       capacity_group: form.elements.capacity_group.value.trim(),
@@ -631,10 +824,28 @@
         });
         e.channels[row.dataset.number] = m;
       });
+    return e;
+  }
+  function draftEndpointConfig() {
+    const e = draftEndpoint();
     const cfg = structuredClone(state.config);
     if (state.editing < 0) cfg.endpoints.push(e);
     else cfg.endpoints[state.editing] = e;
     return cfg;
+  }
+  // kind: "" (progress), "success" or "error".
+  function status(message, kind = "") {
+    $("save-status").textContent = message ? sentence(message) : "";
+    if (kind) $("save-status").dataset.kind = kind;
+    else delete $("save-status").dataset.kind;
+  }
+  function closeEditor() {
+    $("editor").hidden = true;
+    const index = state.config.endpoints.findIndex((e) => e.id === state.opener);
+    const target =
+      (index >= 0 && $("device-list").querySelector(`[data-edit="${index}"]`)) ||
+      $("add");
+    target.focus();
   }
   $("editor").onsubmit = async (event) => {
     event.preventDefault();
@@ -643,10 +854,10 @@
     try {
       const cfg = draftEndpointConfig();
       await persist(cfg);
-      $("editor").hidden = true;
-      notice("Endpoint saved. The lineup is refreshing.");
+      closeEditor();
+      notice("Endpoint saved. The lineup is refreshing.", "success");
     } catch (e) {
-      $("save-status").textContent = e.message;
+      status(e.message, "error");
     } finally {
       $("save").disabled = false;
       $("check-connection").disabled = false;
@@ -657,26 +868,30 @@
     if (!form.reportValidity()) return;
     $("check-connection").disabled = true;
     $("save").disabled = true;
-    $("save-status").textContent = "Checking discovery and lineup…";
-    const draft = draftEndpointConfig();
+    status("Checking discovery and lineup…");
+    // Test only the endpoint being edited, so other saved tuners can't fail it.
+    const draft = { endpoints: [draftEndpoint()] };
     const signature = JSON.stringify(draft);
+    const current = () => JSON.stringify({ endpoints: [draftEndpoint()] }) === signature;
     try {
       const result = await api(
         "/admin/plugins/installations/" + installation + "/config/test",
         "POST", { key: "connection", value: draft }, true,
       );
       // Don't show a result beside fields edited while the request was running.
-      if (JSON.stringify(draftEndpointConfig()) === signature)
-        $("save-status").textContent = result.message;
+      if (current())
+        status(
+          result.message || (result.success ? "Connection successful." : "The connection check failed."),
+          result.success ? "success" : "error",
+        );
     } catch (error) {
-      if (JSON.stringify(draftEndpointConfig()) === signature)
-        $("save-status").textContent = error.message;
+      if (current()) status(error.message, "error");
     } finally {
       $("check-connection").disabled = false;
       $("save").disabled = false;
     }
   };
-  $("editor").addEventListener("input", () => { $("save-status").textContent = ""; });
+  $("editor").addEventListener("input", () => status(""));
   $("device-list").onclick = async (event) => {
     const editButton = event.target.closest("[data-edit]");
     if (editButton) return edit(Number(editButton.dataset.edit));
@@ -697,22 +912,27 @@
       cfg.endpoints.splice(i, 1);
       await persist(cfg);
       $("editor").hidden = true;
+      notice("Endpoint removed.", "success");
+      $("add").focus();
     } catch (e) {
-      notice(e.message);
+      notice(e.message, "error");
     } finally {
       remove.disabled = false;
     }
   };
   $("add").onclick = () => edit(-1);
-  $("cancel").onclick = () => {
-    $("editor").hidden = true;
-  };
+  $("notice-close").onclick = () => notice("");
+  $("cancel").onclick = closeEditor;
   $("refresh").onclick = async () => {
+    $("refresh").disabled = true;
     try {
       await api("/admin/api/refresh", "POST");
-      notice("Refreshing endpoints and guides that are due.");
+      notice("Checking tuners and refreshing guides that are due.", "success");
+      await loadState();
     } catch (e) {
-      notice(e.message);
+      notice(e.message, "error");
+    } finally {
+      $("refresh").disabled = false;
     }
   };
   $("channel-list").onclick = (event) => {
@@ -827,29 +1047,29 @@
     }
     try {
       await loadState();
-      $("source").innerHTML =
-        '<option value="">All endpoints</option>' +
-        state.endpoints
-          .map((e) => `<option value="${esc(e.id)}">${esc(e.name)}</option>`)
-          .join("");
       if (adminPage) {
         state.config = await api("/admin/api/config");
         if (!Array.isArray(state.config.endpoints)) state.config.endpoints = [];
+        state.configLoaded = true;
         renderDevices();
       } else {
         try {
           await preferences();
           renderChannels();
         } catch (e) {
-          notice("Favorites could not load. " + e.message);
+          notice("Favorites could not load. " + sentence(e.message), "error");
         }
       }
       setInterval(() => {
-        if (!document.hidden) loadState().catch((e) => notice(e.message));
+        if (!document.hidden)
+          loadState(true).catch((e) => notice(e.message, "error", "poll"));
       }, 15000);
     } catch (e) {
-      notice(e.message);
+      notice(e.message, "error");
       $("connection").textContent = "Unavailable";
+      const message = "Live TV couldn’t load. " + sentence(e.message) + " Reload the page to try again.";
+      if (adminPage) setHTML($("device-list"), `<p class="device-empty">${esc(message)}</p>`);
+      else $("empty").textContent = message;
     }
   }
   start();

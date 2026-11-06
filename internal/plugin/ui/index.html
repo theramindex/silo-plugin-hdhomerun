@@ -103,7 +103,29 @@
         ></a>
       </div>
     </header>
-    <div id="notice" role="status" hidden></div>
+    <div id="notice" role="status">
+      <div id="notice-body" class="notice" hidden>
+        <span id="notice-text"></span
+        ><button
+          type="button"
+          id="notice-close"
+          class="icon-button"
+          aria-label="Dismiss message"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m6 6 12 12M6 18 18 6" />
+          </svg>
+        </button>
+      </div>
+    </div>
     <main id="viewer">
 <section id="recent-channels" class="recent-channels" aria-label="Recently watched" hidden></section>
 <section id="multiview" class="multiview" aria-label="Multiview" hidden><header><h2>Multiview</h2><button id="multiview-close" type="button">Stop all</button></header><div id="multiview-grid" class="multiview-grid"></div></section>
@@ -185,9 +207,9 @@
             ><select
               id="source"
               class="mobile-source"
-              aria-label="Filter by endpoint"
+              aria-label="Filter by source"
             >
-              <option value="">All endpoints</option></select
+              <option value="">All sources</option></select
             ><span id="channel-count" class="muted"></span>
           </div>
           <div id="guide-tools" hidden>
@@ -232,7 +254,7 @@
           </div>
           <div id="channel-scroll" class="channel-scroll">
             <div id="channel-list"></div>
-            <p id="empty" class="empty" hidden></p>
+            <p id="empty" class="empty">Loading channels…</p>
           </div>
           <div id="pagination" class="pagination">
             <span id="page-range" role="status"></span>
@@ -340,7 +362,9 @@
             ><button id="add" class="primary">Add endpoint</button>
           </div>
         </div>
-        <div id="device-list"></div>
+        <div id="device-list">
+          <p class="device-empty">Loading devices…</p>
+        </div>
         <form id="editor" hidden>
           <div class="section-heading">
             <h2 id="edit-title">Add endpoint</h2>
@@ -357,8 +381,13 @@
               >Endpoint address<input
                 name="url"
                 required
-                type="url"
-                placeholder="http://192.168.1.30" /></label
+                type="text"
+                inputmode="url"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="192.168.1.30" /><small
+                >An IP address or URL. http:// is added when omitted.</small
+              ></label
             ><label
               >Tuner limit<input
                 name="tuner_limit"

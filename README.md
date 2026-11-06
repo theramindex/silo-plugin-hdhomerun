@@ -3,7 +3,7 @@
 Live TV from multiple physical or emulated HDHomeRun HTTP endpoints, built for the **Ramindex Silo fork**. Uses Silo Plugin SDK **v0.32.1** and the fork's `livetv/v1` contract.
 
 - Explicit endpoint addresses, including URL path prefixes used by emulators.
-- **Check Connection** tests discovery and lineup access for enabled draft endpoints before saving. It does not reserve tuners or download guides.
+- **Check Connection** tests discovery and lineup access for the endpoint being edited, before saving; other saved endpoints cannot fail it. It does not reserve tuners or download guides.
 - Distinct channel IDs per endpoint, even when device IDs and channel numbers collide.
 - Optional station mappings combine equivalent channels, with priority and tuner-aware failover before playback starts.
 - Per-endpoint and optional shared-server tuner reservations, atomic capacity checks, 90-second leases, viewer ownership, heartbeats, and stop/disconnect cleanup.
