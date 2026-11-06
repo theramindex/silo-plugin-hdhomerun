@@ -51,8 +51,8 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qq
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.7.2 h1:4jaiDzPyXQvSd7D0EjG45355tLlV3VOECpq10pLC+8s=
 github.com/stretchr/testify v1.7.2/go.mod h1:R6va5+xMeoiuVRoj+gSkQ7d3FALtqAAGI1FQKckRals=
-github.com/theramindex/silo-plugins v0.1.16-0.20261029231702-c1e02a48b1ce h1:XFxH0pnsDDQl79oVZciE1540h04uMFofJbhSzn98Xeo=
-github.com/theramindex/silo-plugins v0.1.16-0.20261029231702-c1e02a48b1ce/go.mod h1:0OptPt5BKQoT0mynwb7QkdCgHouvAs0k2B+nH/DaNFk=
+github.com/theramindex/silo-plugins v0.1.16 h1:9HwMLj+VUtMeiOnCP8r3CXc0F0x+JtrELFg0gK4xVbQ=
+github.com/theramindex/silo-plugins v0.1.16/go.mod h1:WiBX3H3Au5hEHw3jQSNTeG+i3Qp313Eq4LlBbjrXF7U=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/otel v1.44.0 h1:JjwHmHpA4iZ3wBxluu2fbbE7j4kqlE8jXyAyPXH7HqU=
