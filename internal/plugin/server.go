@@ -194,7 +194,16 @@ func (s *Server) Handle(ctx context.Context, r *pluginv1.HandleHTTPRequest) (*pl
 	case m == "GET" && p == "/silo-compat/livetv/v1/info":
 		return response(200, map[string]any{"contractVersion": 1, "name": "HDHomeRun", "streamHosts": []string{s.Engine.StreamHost()}}), nil
 	case m == "GET" && p == "/silo-compat/livetv/v1/channels":
-		return response(200, s.Engine.Snapshot().Channels), nil
+		type linkedChannel struct {
+			hdhr.Channel
+			WatchPath string `json:"watchPath"`
+		}
+		channels := s.Engine.Snapshot().Channels
+		linked := make([]linkedChannel, 0, len(channels))
+		for _, ch := range channels {
+			linked = append(linked, linkedChannel{Channel: ch, WatchPath: "/hdhomerun?channel_id=" + url.QueryEscape(ch.ID)})
+		}
+		return response(200, linked), nil
 	case m == "GET" && (p == "/silo-compat/livetv/v1/programs" || p == "/hdhomerun/api/guide"):
 		return s.programs(ctx, r), nil
 	case (m == "GET" && p == "/silo-compat/livetv/v1/stream") || (m == "POST" && p == "/hdhomerun/api/play"):

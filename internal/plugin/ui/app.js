@@ -1056,6 +1056,9 @@
         try {
           await preferences();
           renderChannels();
+          const launchChannelID = new URLSearchParams(location.search).get("channel_id");
+          const launchChannel = state.channels.find((channel) => channel.id === launchChannelID);
+          if (launchChannel) await play(launchChannel);
         } catch (e) {
           notice("Favorites could not load. " + sentence(e.message), "error");
         }
