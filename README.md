@@ -1,6 +1,6 @@
 # HDHomeRun for Silo
 
-Live TV from multiple physical or emulated HDHomeRun HTTP endpoints, built for the **Ramindex Silo fork**. Uses Silo Plugin SDK **v0.32.1** and the fork's `livetv/v1` contract.
+Live TV from multiple physical or emulated HDHomeRun HTTP endpoints, built for the **Ramedia Server**. Uses Silo Plugin SDK **v0.32.1** and the fork's `livetv/v1` contract.
 
 - Explicit endpoint addresses, including URL path prefixes used by emulators.
 - **Check Connection** tests discovery and lineup access for the endpoint being edited, before saving; other saved endpoints cannot fail it. It does not reserve tuners or download guides.
@@ -14,9 +14,12 @@ Live TV from multiple physical or emulated HDHomeRun HTTP endpoints, built for t
 - The existing Live TV navigation and source sidebar, with 60-channel pages to keep large lineups responsive.
 - MPEG-TS and HLS playback through a private loopback gateway. HLS playlists, keys, nested playlists, and media stay behind Silo authentication.
 
+Ramedia Server is an independent fork of [Silo](https://github.com/Silo-Server/silo-server).
+The existing Silo SDK and Live TV contracts remain compatible.
+
 ## Install and configure
 
-1. Build the companion Silo fork with the generic loopback HTTP stream relay in `internal/plugins/http_proxy_relay.go`. Native compatible TV clients use the existing Live TV contract; the embedded browser player needs this relay.
+1. Build the companion Ramedia Server build with the generic loopback HTTP stream relay in `internal/plugins/http_proxy_relay.go`. Native compatible TV clients use the existing Live TV contract; the embedded browser player needs this relay.
 2. Upload the matching `dist/hdhomerun-<version>-<os>-<arch>.silo-plugin.zip` in Silo's plugin administration.
 3. Open **HDHomeRun Devices**, add a name and base address, then save. For a real tuner, use `http://192.168.1.30`. For Dispatcharr, use its HDHR base, normally `https://your-dispatcharr/hdhr`, or its exported channel/output profile base.
 4. The Silo server must reach both `discover.json` and the advertised lineup and media URLs. A reverse proxy or the source's network access rules must admit the server.
@@ -54,7 +57,7 @@ XMLTV is streamed and filtered to lineup channels and explicit mappings, with a 
 
 ## Optional web premiere shortcuts
 
-The Ramindex Silo server extension can show a channel shortcut on a series,
+The Ramedia Server premiere extension can show a channel shortcut on a series,
 episode, or calendar card while a new episode is expected to premiere. Open
 **Calendar → Premiere reminders** to map a broadcaster to channels in your
 current profile. Series details also allow a show-specific override. One channel
