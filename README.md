@@ -52,6 +52,35 @@ XMLTV is streamed and filtered to lineup channels and explicit mappings, with a 
 - Silo and its plugin process must share a network namespace and local listener. This release does not coordinate tuner reservations across multiple Silo nodes or separate installations.
 - A device or emulator can advertise its configured hostname and its resolved IP aliases. Other media hosts require an explicit additional-host entry. Cross-host redirects are checked. Link-local, multicast, and unspecified targets are refused.
 
+## Optional web premiere shortcuts
+
+The Ramindex Silo server extension can show a channel shortcut on a series,
+episode, or calendar card while a new episode is expected to premiere. Open
+**Calendar → Premiere reminders** to map a broadcaster to channels in your
+current profile. Series details also allow a show-specific override. One channel
+opens directly; multiple mapped feeds open a chooser.
+
+The server sends one reminder per episode/profile for eligible favorites,
+watchlist shows, and series with a completed episode. Existing notification
+preferences, series mutes, library access, and profile channel selections apply.
+The default shortcut window is 60 minutes, configurable from 15 to 240 minutes.
+
+Timing comes from the catalog's original episode date, series airtime, and
+timezone. Date-only metadata cannot produce a timed shortcut. This is an expected
+premiere: it does not confirm what a selected feed is actually showing. EPG
+refresh intervals and DVR enablement do not drive these reminders. Different
+regional feeds can air the episode at different times.
+
+**Older-server compatibility:** the plugin still works without this server
+extension. `watchPath` is an optional field on the existing `livetv/v1` channel
+response; older hosts ignore it. Existing channel IDs, guide, stream resolution,
+favorites, provider configuration, and playback routes keep their contracts.
+Only the library/calendar shortcut and reminder need a server advertising
+`GET /api/v2/premieres/capabilities`. The plugin does not call that endpoint or
+create reminder tables itself. These new controls are web-only; native clients
+are unchanged.
+
+
 ## Development
 
 Requires Go 1.26 and Node 22+ for verification.
